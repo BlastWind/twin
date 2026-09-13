@@ -15,7 +15,9 @@ import type {
   EdgeId,
   HourResultDTO,
   Hour,
+  NodeId,
   ReachResultDTO,
+  SnapResultDTO,
   ResultKind,
   ScenarioDTO,
   StatsDTO,
@@ -254,4 +256,38 @@ export type CalibrationState = {
 export const useCalibrationStore = create<CalibrationState>((set) => ({
   rows: [],
   setRows: (rows) => set({ rows }),
+}))
+
+// ------------------------------------------------------------------ transit
+
+/**
+ * The transit pattern currently being drawn. It is *not* part of the scenario
+ * until it is committed: an unfinished list of stops has no headway and no
+ * meaning, and it should not travel in the URL hash.
+ */
+export type DraftStop = { readonly node: NodeId; readonly lon: number; readonly lat: number }
+
+export type TransitState = {
+  readonly stops: readonly DraftStop[]
+  readonly headwayMin: number
+  readonly routeName: string
+  addStop: (stop: SnapResultDTO) => void
+  popStop: () => void
+  setHeadway: (headwayMin: number) => void
+  setRouteName: (routeName: string) => void
+  clear: () => void
+}
+
+const DEFAULT_HEADWAY_MIN = 15
+
+export const useTransitStore = create<TransitState>((set) => ({
+  stops: [],
+  headwayMin: DEFAULT_HEADWAY_MIN,
+  routeName: '',
+  // a click that snapped to nothing (no chunks resident) is dropped, not queued
+  addStop: (stop) => set((s) => (stop === null ? s : { stops: [...s.stops, stop] })),
+  popStop: () => set((s) => ({ stops: s.stops.slice(0, -1) })),
+  setHeadway: (headwayMin) => set({ headwayMin }),
+  setRouteName: (routeName) => set({ routeName }),
+  clear: () => set({ stops: [], routeName: '' }),
 }))

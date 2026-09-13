@@ -174,3 +174,12 @@ button.link { background: none; border: none; color: var(--dim); text-decoration
   text-transform: uppercase;
   color: #6c7686;
 }
+
+.reach-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; font-size: 11px; color: #9aa4b2; }
+.reach-legend span { display: flex; align-items: center; gap: 5px; }
+.swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+button.on { border-color: #3987e5; color: #cde2fb; }
+.stop-list { list-style: none; margin: 4px 0; padding: 0; max-height: 120px; overflow-y: auto; }
+.stop-list li { display: flex; gap: 6px; font-size: 11px; color: #9aa4b2; padding: 1px 0; }
+.chart { width: 100%; display: block; }
+.chart-note { font-size: 11px; color: #6c7686; margin: 2px 0 6px; }

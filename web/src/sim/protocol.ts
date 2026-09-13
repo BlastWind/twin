@@ -83,6 +83,14 @@ export type KpiDTO = {
   readonly topEdges: readonly { readonly edge: EdgeId; readonly vc: number }[]
 }
 
+/**
+ * A clicked point resolved to the nearest graph node. The node table lives in
+ * the worker, so snapping does too — the transit editor names stops by node id
+ * because that is what a pattern is made of.
+ */
+export type SnapRequestDTO = { readonly lon: number; readonly lat: number }
+export type SnapResultDTO = { readonly node: NodeId; readonly lon: number; readonly lat: number } | null
+
 /** Isochrone origin and budget; `hour` picks the transit timetable slice. */
 export type IsochroneRequestDTO = {
   readonly lon: number
@@ -152,6 +160,7 @@ export type RequestDTO =
   | { readonly type: 'load-counts'; readonly seq: number; readonly payload: LoadBlobDTO }
   | { readonly type: 'isochrone'; readonly seq: number; readonly payload: IsochroneRequestDTO }
   | { readonly type: 'calibration'; readonly seq: number; readonly payload: Record<string, never> }
+  | { readonly type: 'snap'; readonly seq: number; readonly payload: SnapRequestDTO }
 
 export type RequestType = RequestDTO['type']
 
@@ -192,6 +201,7 @@ export type ResponseDTO =
   | { readonly type: 'hour-result'; readonly seq: number; readonly payload: HourResultDTO }
   | { readonly type: 'run-done'; readonly seq: number; readonly payload: { readonly id: RunId; readonly kind: ResultKind } }
   | { readonly type: 'reach'; readonly seq: number; readonly payload: ReachResultDTO }
+  | { readonly type: 'snap'; readonly seq: number; readonly payload: { readonly snapped: SnapResultDTO } }
   | { readonly type: 'calibration'; readonly seq: number; readonly payload: { readonly rows: readonly CalibrationDTO[] } }
   | { readonly type: 'error'; readonly seq: number; readonly payload: WorkerErrorDTO }
 
@@ -255,6 +265,7 @@ const REQUEST_TYPES: ReadonlySet<string> = new Set<RequestType>([
   'load-counts',
   'isochrone',
   'calibration',
+  'snap',
 ])
 const RESPONSE_TYPES: ReadonlySet<string> = new Set<ResponseType>([
   'ready',
@@ -266,6 +277,7 @@ const RESPONSE_TYPES: ReadonlySet<string> = new Set<ResponseType>([
   'run-done',
   'reach',
   'calibration',
+  'snap',
   'error',
 ])
 

@@ -1,5 +1,12 @@
 import { gauge, mark } from '../perf'
-import { useSimStore, useUiStore, useWorldStore } from '../state/stores'
+import {
+  useCalibrationStore,
+  useReachStore,
+  useSimStore,
+  useTransitStore,
+  useUiStore,
+  useWorldStore,
+} from '../state/stores'
 import { AssetLoader, Priority, type AssetPath } from './AssetLoader'
 import {
   ALL_HOURS,
@@ -12,6 +19,7 @@ import {
   type RequestDTO,
   type ResponseDTO,
   type ResultKind,
+  type IsochroneRequestDTO,
   type RunId,
   type ScenarioDTO,
 } from './protocol'
@@ -37,6 +45,10 @@ export type SimClient = {
   readonly start: () => Promise<void>
   readonly setStudyArea: (area: StudyArea) => Promise<void>
   readonly run: (kind: ResultKind, scenario: ScenarioDTO, hours?: readonly Hour[]) => void
+  /** Recomputes the reach from the stored origin; a no-op when there is none. */
+  readonly isochrone: (req: IsochroneRequestDTO) => void
+  readonly calibration: () => void
+  readonly snap: (lon: number, lat: number) => void
   readonly selectHour: (kind: ResultKind, h: Hour) => void
   readonly stats: () => void
   readonly terminate: () => void
@@ -45,6 +57,16 @@ export type SimClient = {
 }
 
 const BASELINE_HOUR: Hour = hour(8)
+
+/** `requestIdleCallback` where it exists, a macrotask everywhere else. */
+const whenIdle = (fn: () => Promise<void>): Promise<void> =>
+  new Promise((resolve) => {
+    const run = () => void fn().then(resolve)
+    const ric = (globalThis as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void })
+      .requestIdleCallback
+    if (ric) ric(run, { timeout: 5_000 })
+    else setTimeout(run, 0)
+  })
 const MANIFEST_PATH = 'manifest.json' as AssetPath
 const INDEX_PATH = 'graph/index.bin' as AssetPath
 
@@ -70,6 +92,16 @@ const applyResponse = (res: ResponseDTO): void => {
       gauge('scenarioHours', Object.keys(sim.scenario).length)
       return
     }
+    case 'reach':
+      mark('first-isochrone')
+      gauge('reachNodes', res.payload.summary.nodes)
+      return useReachStore.getState().putResult(res.payload)
+    case 'calibration':
+      return useCalibrationStore.getState().setRows(res.payload.rows)
+    case 'snap':
+      // only ever requested while the transit editor is drawing, so the reply
+      // is the next stop of whatever pattern is open
+      return useTransitStore.getState().addStop(res.payload.snapped)
     case 'run-done':
       return useSimStore.getState().setStatus('done', res.payload.kind)
     case 'error':
@@ -133,6 +165,26 @@ export const createSimClient = (): SimClient => {
       }),
     )
     demandReady = got[0] === true
+  }
+
+  /**
+   * Feeds are not on the critical path: the graph, demand and the baseline all
+   * come first, then these fill in at idle priority (DESIGN 7.1 step 4). A file
+   * the pipeline has not produced yet simply never arrives — the isochrone tool
+   * falls back to the worker's stub and the calibration panel stays empty.
+   */
+  const loadFeeds = async (): Promise<void> => {
+    const pairs = [
+      ['transit.bin', 'load-transit'],
+      ['counts.bin', 'load-counts'],
+    ] as const
+    await Promise.all(
+      pairs.map(async ([path, type]) => {
+        const buf = await loader!.get(path as AssetPath, Priority.Idle).catch(() => null)
+        if (buf) send({ type, payload: { bytes: buf } })
+      }),
+    )
+    mark('feeds')
   }
 
   /**
@@ -220,12 +272,20 @@ export const createSimClient = (): SimClient => {
     mark('demand')
     startBaseline()
     send({ type: 'stats', payload: {} })
+    // after the graph, never in front of it
+    void whenIdle(loadFeeds)
   }
 
   return {
     start,
     setStudyArea,
     run,
+    isochrone: (req) => {
+      useReachStore.getState().setStatus('running')
+      send({ type: 'isochrone', payload: req })
+    },
+    calibration: () => send({ type: 'calibration', payload: {} }),
+    snap: (lon, lat) => send({ type: 'snap', payload: { lon, lat } }),
     selectHour: (kind, h) => send({ type: 'select-hour', payload: { kind, hour: h } }),
     stats: () => send({ type: 'stats', payload: {} }),
     terminate: () => worker.terminate(),

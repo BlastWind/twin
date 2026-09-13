@@ -6,6 +6,8 @@ import { DevOverlay } from './DevOverlay'
 import { HourScrubber } from './HourScrubber'
 import { EdgeTooltip } from './EdgeTooltip'
 import { ScenarioEditor } from './ScenarioEditor'
+import { ReachTool } from './ReachTool'
+import { TransitEditor } from './TransitEditor'
 import { Dashboard } from './Dashboard'
 import { StudyAreaTool } from './StudyAreaTool'
 import { createSimClient, setSimClient } from '../sim/client'
@@ -34,7 +36,9 @@ export const App = () => {
       <div className="left-rail">
         <LayerPanel />
         <StudyAreaTool />
+        <ReachTool />
         <ScenarioEditor />
+        <TransitEditor />
       </div>
       <div className="right-rail">
         <Dashboard />

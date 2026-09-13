@@ -11,6 +11,8 @@ export type LoadStage =
   | 'chunks'
   | 'demand'
   | 'first-baseline'
+  | 'feeds'
+  | 'first-isochrone'
   | 'overlay-ready'
 
 export type StageTiming = { readonly stage: LoadStage; readonly atMs: number }
@@ -34,7 +36,14 @@ export const timings = (): readonly StageTiming[] =>
  * Numeric gauges the Playwright harness reads off `window`. Marks are one-shot
  * timestamps; gauges are values that keep moving (bytes sent, hours computed).
  */
-export type Gauge = 'workerMessageBytes' | 'baselineHours' | 'scenarioHours' | 'overlayPaths'
+export type Gauge =
+  | 'workerMessageBytes'
+  | 'baselineHours'
+  | 'scenarioHours'
+  | 'overlayPaths'
+  | 'reachNodes'
+  /** 1 once every available registry layer has been switched on. */
+  | 'allLayersOn'
 
 const gauges: Record<string, number> = {}
 

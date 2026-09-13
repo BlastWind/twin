@@ -16,7 +16,19 @@ import {
   type WorkerErrorDTO,
   type EdgeId,
 } from './protocol'
-import { createStubSolver, loadWasmSolver, scenarioJson, type KpiJsonDTO, type SolverApi } from './wasmApi'
+import {
+  createStubSolver,
+  createStubTransit,
+  loadWasmSolver,
+  scenarioJson,
+  type CalibrationJsonDTO,
+  type KpiJsonDTO,
+  type ReachSummaryJsonDTO,
+  type SolverApi,
+  type TransitApi,
+} from './wasmApi'
+import { createNodeIndex, type NodeId } from './nodeIndex'
+import type { CalibrationDTO, IsochroneRequestDTO, NodeId as ProtocolNodeId, ReachResultDTO } from './protocol'
 
 /**
  * Sim worker: owns the solver, the chunk residency set and the per-hour result
@@ -81,8 +93,11 @@ const hourResult = (
  * are dropped at low zoom on the main thread, so both arrays ship once and the
  * per-hour update touches only the colour attribute.
  */
+const nodes = createNodeIndex()
+
 const geometryOf = (chunk: ChunkKey, bytes: ArrayBuffer): ChunkGeometryDTO => {
   const c = decodeChunk(bytes)
+  nodes.put(chunk, c)
   const e = c.meta.edgeCount
   const counts = Array.from({ length: e }, (_, i) =>
     c.geomOffsets ? c.geomOffsets[i + 1]! - c.geomOffsets[i]! : 2,
@@ -136,7 +151,44 @@ const runHours = (solver: SolverApi, req: RunRequestDTO): void => {
   step()
 }
 
-const handle = (solver: SolverApi, req: RequestDTO): void => {
+/**
+ * Modeled daily volume per edge, summed over whatever baseline hours are
+ * cached. Only the stub calibration needs it — the real `calibration()` reads
+ * the solver's own last-24h state — but the shapes have to match either way.
+ */
+const dailyByEdge = (solver: SolverApi): ReadonlyMap<number, number> => {
+  const order = solver.loadedEdgeIds()
+  const totals = new Map<number, number>()
+  caches.baseline.forEach((cell) => {
+    const n = cell.raw.length / 3
+    for (let i = 0; i < n && i < order.length; i += 1) totals.set(order[i]!, (totals.get(order[i]!) ?? 0) + cell.raw[i]!)
+  })
+  return totals
+}
+
+const reachOf = (transit: TransitApi, req: IsochroneRequestDTO): ReachResultDTO => {
+  const pairs = transit.isochrone(req.lon, req.lat, req.hour, req.budgetMin)
+  const reached = pairs.length / 2
+  // resolve ids to coordinates here: the node table never leaves the worker
+  const positions = new Float32Array(reached * 2)
+  for (let i = 0; i < reached; i += 1) {
+    const at = nodes.positionOf(pairs[i * 2]! as NodeId)
+    positions[i * 2] = at?.[0] ?? Number.NaN
+    positions[i * 2 + 1] = at?.[1] ?? Number.NaN
+  }
+  const summary = JSON.parse(transit.reachSummaryJson()) as ReachSummaryJsonDTO
+  return { request: req, pairs, positions, summary }
+}
+
+const calibrationOf = (transit: TransitApi): readonly CalibrationDTO[] =>
+  (JSON.parse(transit.calibrationJson()) as readonly CalibrationJsonDTO[]).map((r) => ({
+    stationId: r.station_id,
+    edge: r.edge_id as EdgeId,
+    aadt: r.aadt,
+    modeledDaily: r.modeled_daily,
+  }))
+
+const handle = (solver: SolverApi, transit: TransitApi, req: RequestDTO): void => {
   switch (req.type) {
     case 'load-index':
       solver.loadIndex(new Uint8Array(req.payload.index))
@@ -148,7 +200,10 @@ const handle = (solver: SolverApi, req: RequestDTO): void => {
       return post({ type: 'ack', seq: req.seq, payload: { ok: true } })
     }
     case 'free-chunk':
-      req.payload.chunks.forEach((c) => solver.freeChunk(c.chunkIx))
+      req.payload.chunks.forEach((c) => {
+        solver.freeChunk(c.chunkIx)
+        nodes.drop(c.chunk)
+      })
       return post({ type: 'ack', seq: req.seq, payload: { ok: true } })
     case 'load-demand':
       solver.loadDemand(new Uint8Array(req.payload.bytes))
@@ -172,6 +227,25 @@ const handle = (solver: SolverApi, req: RequestDTO): void => {
     }
     case 'run':
       return runHours(solver, req.payload)
+    case 'load-transit':
+      transit.loadTransit(new Uint8Array(req.payload.bytes))
+      return post({ type: 'ack', seq: req.seq, payload: { ok: true } })
+    case 'load-counts':
+      transit.loadCounts(new Uint8Array(req.payload.bytes))
+      return post({ type: 'ack', seq: req.seq, payload: { ok: true } })
+    case 'isochrone':
+      return post({ type: 'reach', seq: req.seq, payload: reachOf(transit, req.payload) })
+    case 'calibration':
+      return post({ type: 'calibration', seq: req.seq, payload: { rows: calibrationOf(transit) } })
+    case 'snap': {
+      const node = nodes.nearest(req.payload.lon, req.payload.lat)
+      const at = node === null ? null : nodes.positionOf(node)
+      return post({
+        type: 'snap',
+        seq: req.seq,
+        payload: { snapped: node === null || !at ? null : { node: node as unknown as ProtocolNodeId, lon: at[0], lat: at[1] } },
+      })
+    }
   }
 }
 
@@ -179,10 +253,12 @@ void loadWasmSolver()
   .catch(() => null)
   .then((real) => real ?? createStubSolver())
   .then((solver) => {
+    // a module can be a complete solver and still predate transit.rs
+    const transit = solver.transit ?? createStubTransit(nodes, () => dailyByEdge(solver))
     post({ type: 'ready', seq: 0, payload: statsOf(solver) })
     self.onmessage = (ev: MessageEvent<unknown>) => {
       try {
-        handle(solver, decodeRequest(ev.data))
+        handle(solver, transit, decodeRequest(ev.data))
       } catch (e) {
         post(errorOf('run-failed', e, -1))
       }

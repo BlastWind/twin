@@ -4,7 +4,9 @@ import { onMap, type MapHandle } from '../map/mapRef'
 import { useSimStore, useUiStore, useWorldStore, type ViewMode } from '../state/stores'
 import { diffVc, type EdgeOrder } from '../state/resultCache'
 import { buildColors, buildModel, EMPTY_MODEL, MAJOR_ONLY_BELOW_ZOOM, type PathModel, type ViewBounds } from './model'
-import type { EdgeId, HourResultDTO } from '../sim/protocol'
+import type { EdgeId, HourResultDTO, ReachResultDTO } from '../sim/protocol'
+import { bandColor, bandsOf, type ReachBand } from './reach'
+import { REACH_BANDS_MIN, useReachStore } from '../state/stores'
 
 /**
  * deck.gl result overlay (DESIGN 7.2). Interleaved with the MapLibre layers via
@@ -12,17 +14,66 @@ import type { EdgeId, HourResultDTO } from '../sim/protocol'
  * shell until there is something to draw.
  */
 
+type DeckLayer = new (props: Record<string, unknown>) => unknown
+
 type DeckModules = {
   readonly MapboxOverlay: new (props: Record<string, unknown>) => {
     setProps: (p: Record<string, unknown>) => void
     finalize: () => void
   }
-  readonly PathLayer: new (props: Record<string, unknown>) => unknown
+  readonly PathLayer: DeckLayer
+  readonly ScatterplotLayer: DeckLayer
+  readonly PolygonLayer: DeckLayer
 }
 
 const loadDeck = async (): Promise<DeckModules> => {
   const [mapbox, layers] = await Promise.all([import('@deck.gl/mapbox'), import('@deck.gl/layers')])
-  return { MapboxOverlay: mapbox.MapboxOverlay as DeckModules['MapboxOverlay'], PathLayer: layers.PathLayer as DeckModules['PathLayer'] }
+  return {
+    MapboxOverlay: mapbox.MapboxOverlay as DeckModules['MapboxOverlay'],
+    PathLayer: layers.PathLayer as DeckLayer,
+    ScatterplotLayer: layers.ScatterplotLayer as DeckLayer,
+    PolygonLayer: layers.PolygonLayer as DeckLayer,
+  }
+}
+
+/**
+ * Reach layers: the contour per time band under a thinned point cloud of the
+ * reachable nodes themselves, so the hull's over-reach is visible rather than
+ * implied. Drawn by this overlay rather than a second `MapboxOverlay` so there
+ * is one deck instance and one z-order.
+ */
+const reachLayers = (deck: DeckModules, result: ReachResultDTO | null): readonly unknown[] => {
+  if (!result || result.pairs.length === 0) return []
+  const bands = bandsOf(result, REACH_BANDS_MIN)
+  const points = Array.from({ length: result.pairs.length / 2 }, (_, i) => i).filter((i) =>
+    Number.isFinite(result.positions[i * 2]),
+  )
+  return [
+    new deck.PolygonLayer({
+      id: 'twin-reach-bands',
+      // widest first: the tighter bands paint over it
+      data: [...bands].reverse(),
+      getPolygon: (b: ReachBand) => b.ring,
+      getFillColor: (b: ReachBand) => bandColor(REACH_BANDS_MIN.indexOf(b.maxMinutes), 38),
+      getLineColor: (b: ReachBand) => bandColor(REACH_BANDS_MIN.indexOf(b.maxMinutes), 200),
+      getLineWidth: 2,
+      lineWidthUnits: 'pixels',
+      stroked: true,
+      filled: true,
+      pickable: false,
+    }),
+    new deck.ScatterplotLayer({
+      id: 'twin-reach-nodes',
+      data: points,
+      getPosition: (i: number) => [result.positions[i * 2]!, result.positions[i * 2 + 1]!],
+      getFillColor: (i: number) =>
+        bandColor(REACH_BANDS_MIN.findIndex((m) => result.pairs[i * 2 + 1]! <= m * 60), 190),
+      getRadius: 2,
+      radiusUnits: 'pixels',
+      radiusMinPixels: 1.5,
+      pickable: false,
+    }),
+  ]
 }
 
 /** The values the overlay colours by, and whether they are signed (diff mode). */
@@ -105,6 +156,7 @@ export const ResultOverlay = () => {
   const select = useUiStore((s) => s.select)
   const baselineCache = useSimStore((s) => s.baseline)
   const scenarioCache = useSimStore((s) => s.scenario)
+  const reach = useReachStore((s) => s.result)
   const baseline = baselineCache[hour]
   const scenarioResult = scenarioCache[hour]
 
@@ -163,11 +215,11 @@ export const ResultOverlay = () => {
     const overlay = overlayRef.current
     if (!overlay || !deck) return
     gauge('overlayPaths', model.pathCount)
-    if (model.pathCount === 0) return overlay.setProps({ layers: [] })
     const onHover = (index: number, x: number, y: number) =>
       setHover(index < 0 ? null : { edge: model.edges[index] as EdgeId, classByte: model.classes[index] ?? 9, x, y })
-    overlay.setProps({ layers: [new deck.PathLayer(layerProps(model, colors, onHover, select))] })
-  }, [deck, model, colors, hour, setHover, select])
+    const paths = model.pathCount === 0 ? [] : [new deck.PathLayer(layerProps(model, colors, onHover, select))]
+    overlay.setProps({ layers: [...paths, ...reachLayers(deck, reach)] })
+  }, [deck, model, colors, hour, reach, setHover, select])
 
   return null
 }
