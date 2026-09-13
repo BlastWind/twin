@@ -297,3 +297,10 @@ export const useTransitStore = create<TransitState>((set) => ({
   setRouteName: (routeName) => set({ routeName }),
   clear: () => set({ stops: [], routeName: '' }),
 }))
+
+/**
+ * Handles for the Playwright harness, which has to drive the app from outside
+ * React: turn every layer on, drop a reach origin. Nothing in the app reads
+ * these.
+ */
+Object.assign(globalThis, { __twinUi: useUiStore, __twinReach: useReachStore })

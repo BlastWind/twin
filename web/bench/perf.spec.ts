@@ -22,7 +22,9 @@ type MetricName =
   | 'mapIdleMs'
   | 'workerReadyMs'
   | 'firstBaselineMs'
+  | 'firstIsochroneMs'
   | 'heapBytesAfterLoad'
+  | 'heapBytesAllLayers'
   | 'heapBytesAfter24h'
   | 'transferBytes'
   | 'workerMessageBytes'
@@ -30,6 +32,7 @@ type MetricName =
   | 'fpsZ11'
   | 'fpsZ13'
   | 'fpsZ15'
+  | 'reachNodes'
 
 /** Higher-is-better metrics regress when they *fall*; the rest when they rise. */
 const HIGHER_IS_BETTER: ReadonlySet<MetricName> = new Set<MetricName>(['fpsZ11', 'fpsZ13', 'fpsZ15'])
@@ -45,6 +48,7 @@ const HIGHER_IS_BETTER: ReadonlySet<MetricName> = new Set<MetricName>(['fpsZ11',
  */
 const INFORMATIONAL: ReadonlySet<MetricName> = new Set<MetricName>([
   'overlayPaths',
+  'reachNodes',
   'fpsZ11',
   'fpsZ13',
   'fpsZ15',
@@ -157,6 +161,44 @@ const bestFps = async (page: Page, zoom: number, passes = 3): Promise<number> =>
   return runs.length > 0 ? Math.max(...runs) : Number.NaN
 }
 
+/**
+ * Switch on every layer the tiles actually carry. The registry hides what the
+ * pipeline has not emitted, so this is "all available layers", which is the
+ * state the heap figure is about.
+ */
+const enableAllLayers = async (page: Page): Promise<number> => {
+  const n = await page.evaluate(() => {
+    const g = globalThis as { __twinUi?: { getState: () => { registry: { id: string; available: boolean }[]; layers: Record<string, boolean>; toggleLayer: (id: string) => void } } }
+    const store = g.__twinUi
+    if (!store) return 0
+    const { registry, layers, toggleLayer } = store.getState()
+    const off = registry.filter((l) => l.available && !layers[l.id])
+    off.forEach((l) => toggleLayer(l.id))
+    return registry.filter((l) => l.available).length
+  })
+  await page.waitForTimeout(1500)
+  return n
+}
+
+/** Drops a reach origin at the camera centre and waits for the first result. */
+const requestIsochrone = async (page: Page): Promise<void> => {
+  await page.evaluate(() => {
+    const g = globalThis as {
+      __twinMap?: { getCenter: () => { lng: number; lat: number } }
+      __twinReach?: { getState: () => { setOrigin: (o: [number, number]) => void } }
+    }
+    const c = g.__twinMap?.getCenter()
+    if (c) g.__twinReach?.getState().setOrigin([c.lng, c.lat])
+  })
+  await page
+    .waitForFunction(
+      () => (globalThis as { __twinMarks?: Record<string, number> }).__twinMarks?.['first-isochrone'] !== undefined,
+      null,
+      { timeout: 60_000 },
+    )
+    .catch(() => undefined)
+}
+
 /** CDP heap usage: exact, unlike the quantized `performance.memory`. */
 const heapBytes = async (cdp: CDPSession): Promise<number> => {
   await cdp.send('HeapProfiler.collectGarbage').catch(() => undefined)
@@ -193,13 +235,25 @@ test('browser perf harness', async ({ page }) => {
   const heapAfterLoad = await heapBytes(session)
   await wait24h(page)
 
+  // Every registry layer on, then a reach from the middle of the study area:
+  // this is the heaviest state the app has, and the isochrone is the one
+  // Phase-3 interaction with a latency a user waits on.
+  const layersOn = await enableAllLayers(page)
+  const heapAllLayers = await heapBytes(session)
+  await requestIsochrone(page)
+  const firstIsochroneMs = await markMs(page, 'first-isochrone')
+  const reachNodes = await gauge(page, 'reachNodes')
+
   const loadMetrics: Results = {
     firstPaintMs: Number(firstPaintMs.toFixed(1)),
     firstTileMs: Number((await markMs(page, 'first-tile')).toFixed(1)),
     mapIdleMs: Number((await markMs(page, 'map-idle')).toFixed(1)),
     workerReadyMs: Number((await markMs(page, 'worker-ready')).toFixed(1)),
     firstBaselineMs: Number((await markMs(page, 'first-baseline')).toFixed(1)),
+    firstIsochroneMs: Number(firstIsochroneMs.toFixed(1)),
     heapBytesAfterLoad: heapAfterLoad,
+    heapBytesAllLayers: heapAllLayers,
+    reachNodes,
     heapBytesAfter24h: await heapBytes(session),
     transferBytes,
     workerMessageBytes: await gauge(page, 'workerMessageBytes'),
@@ -235,6 +289,8 @@ test('browser perf harness', async ({ page }) => {
   writeJson(RESULTS, results)
   // eslint-disable-next-line no-console
   console.table(results)
+  // eslint-disable-next-line no-console
+  console.log(`[perf] heap measured with ${layersOn} available layers on`)
 
   const baseline = readJson<Results>(BASELINES)
   if (!baseline) {
