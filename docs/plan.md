@@ -21,3 +21,14 @@ Phases are sequential; tracks within a phase are parallel and touch disjoint pat
 2. Zone aggregation to ~400 zones for county runs.
 3. Threaded wasm via wasm-bindgen-rayon + COOP/COEP headers.
 4. AddEdge support in the solver and editor.
+
+## Phase 2.5 + Phase 3 contracts (2026-09-13)
+Ownership: 2.5 agent owns `twin-core` solver/graph files, `twin-wasm/src/lib.rs`, `twin-bench`. Phase 3 pipeline agent owns `twin-pipeline`, `scripts/`, new files `twin-core/src/{transit,feeds,counts}.rs`, `twin-wasm/src/transit.rs`. Phase 3 web agent owns `web/`.
+
+Tile layers (world.pmtiles): `buildings` (height m from county GIS, fallback OSM), `parcels` (parcel_id, zone, land_use, assessed_value, area_m2), `zoning` (zone, category), `transit_routes` (route_id, agency, short_name, color), `transit_stops` (stop_id, name), `crashes` (year, severity 1-5, lon/lat; z12+ points, `crash_grid` below), `counts` (station_id, aadt, year).
+
+Binaries: `transit.bin` (TransitSchema: stops[node_id, lonlat], patterns[stop idx seq], per-pattern per-hour headway_s + run_s per hop), `counts.bin` (station_id, edge_id nearest, aadt), `feeds.bin` (crash points binned to grid + nearest edge). All via the existing header/section-table format; new section kinds ≥ 40.
+
+wasm (transit.rs): `loadTransit(bytes)`, `isochrone(lon, lat, hour, budgetMin) -> Float32Array` of [node_id, seconds] pairs, `reachSummary() -> string` JSON `{nodes, population}`. `loadCounts(bytes)`, `calibration() -> string` JSON `[{station_id, edge_id, aadt, modeled_daily}]` computed from the last 24h results.
+
+wasm threads (2.5): if wasm-bindgen-rayon is adopted, the web app must serve `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`; web agent adds these to vite config now.
