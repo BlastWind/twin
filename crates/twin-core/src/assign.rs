@@ -174,7 +174,7 @@ fn merge_zones(demand: &DemandSchema<'_>, target: usize) -> Vec<u16> {
     let mut of_zone = vec![0u16; n];
     for _ in 0..12 {
         let mut moved = false;
-        for z in 0..n {
+        for (z, slot) in of_zone.iter_mut().enumerate() {
             let p = at(z);
             let best = seeds
                 .iter()
@@ -184,7 +184,7 @@ fn merge_zones(demand: &DemandSchema<'_>, target: usize) -> Vec<u16> {
                     d(a).total_cmp(&d(b))
                 })
                 .map_or(0, |(i, _)| i as u16);
-            moved |= std::mem::replace(&mut of_zone[z], best) != best;
+            moved |= std::mem::replace(slot, best) != best;
         }
         if !moved {
             break;

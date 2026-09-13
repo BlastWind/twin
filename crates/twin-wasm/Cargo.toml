@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 twin-core = { workspace = true }
+rayon = "1.10"
 wasm-bindgen = "0.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -18,3 +19,16 @@ serde-wasm-bindgen = "0.6"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3", features = ["console"] }
 console_error_panic_hook = "0.1"
+wasm-bindgen-rayon = { version = "1.3", optional = true }
+
+[features]
+default = []
+# The threaded browser build. Needs nightly and a rebuilt std (see README);
+# the default build is single-threaded and builds on stable.
+threads = ["twin-core/parallel", "dep:wasm-bindgen-rayon"]
+
+# wasm-opt must be told about the threads proposal, or it rewrites the shared
+# memory the threaded build depends on into a plain one and `initThreadPool`
+# fails with "Memory could not be cloned".
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ['-O2', '--enable-threads', '--enable-bulk-memory', '--enable-mutable-globals']

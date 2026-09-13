@@ -19,6 +19,28 @@ use twin_core::{
 };
 use wasm_bindgen::prelude::*;
 
+/// `initThreadPool(n)`, which the worker must await before the first
+/// [`TwinWorld::run_hour`] in the threaded build. Absent from the
+/// single-threaded build, which is how the worker feature-detects it.
+#[cfg(all(target_arch = "wasm32", feature = "threads"))]
+pub use wasm_bindgen_rayon::init_thread_pool;
+
+/// How many threads the all-or-nothing loop will actually fork over. 1 in the
+/// single-threaded build, and 1 in the threaded one until `initThreadPool` has
+/// resolved, so the worker can report what it got rather than what it asked
+/// for.
+#[wasm_bindgen(js_name = threadCount)]
+pub fn thread_count() -> u32 {
+    #[cfg(any(not(target_arch = "wasm32"), feature = "threads"))]
+    {
+        rayon::current_num_threads() as u32
+    }
+    #[cfg(all(target_arch = "wasm32", not(feature = "threads")))]
+    {
+        1
+    }
+}
+
 /// What the worker reports to the UI. Mirrors the `stats()` shape in
 /// DESIGN.md section 7.1.
 #[derive(Debug, Clone, Copy, Default, Serialize)]

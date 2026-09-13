@@ -8,7 +8,9 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::hint::black_box;
 use std::path::Path;
-use twin_core::assign::{all_or_nothing_pass, assign, free_flow_costs, AssignParams};
+use twin_core::assign::{
+    all_or_nothing_pass, assign, free_flow_costs, AssignParams, AssignPlan, Loader, Zoning,
+};
 use twin_core::demand::{DemandMetaSchema, DemandSchema, OdTripleSchema, NHTS_HOUR_PROFILE};
 use twin_core::graph_schema::GraphChunkSchema;
 use twin_core::schema::AlignedBytes;
@@ -188,7 +190,8 @@ fn bench_cch_one_to_many(c: &mut Criterion) {
 }
 
 /// One all-or-nothing pass: the inner half of a Frank-Wolfe iteration, and the
-/// part that scales with the zone count.
+/// part that scales with the zone count. Both loaders, because which one wins
+/// is the whole question at county scale.
 fn bench_aon(c: &mut Criterion) {
     let mut group = c.benchmark_group("aon_pass");
     group.sample_size(10);
@@ -197,9 +200,21 @@ fn bench_aon(c: &mut Criterion) {
         let demand = DemandSchema::decode(&f.demand_bytes).expect("demand decodes");
         let view = ScenarioView::apply(f.graph.view(), &Scenario::empty());
         let cost = free_flow_costs(&view);
-        group.bench_function(BenchmarkId::from_parameter(&label), |b| {
-            b.iter(|| black_box(all_or_nothing_pass(&view, &demand, hour, &cost)))
-        });
+        let order = order_for(&view);
+        for (kind, loader) in [
+            ("dijkstra", Loader::Dijkstra),
+            ("cch", Loader::cch(&view, &order)),
+        ] {
+            let mut plan = AssignPlan::new(loader);
+            group.bench_function(
+                BenchmarkId::from_parameter(format!("{label}/{kind}")),
+                |b| {
+                    b.iter(|| {
+                        black_box(all_or_nothing_pass(&view, &demand, hour, &cost, &mut plan))
+                    })
+                },
+            );
+        }
     }
     group.finish();
 }
@@ -217,8 +232,10 @@ fn bench_bfw_iteration(c: &mut Criterion) {
         let hour = f.hour();
         let demand = DemandSchema::decode(&f.demand_bytes).expect("demand decodes");
         let view = ScenarioView::apply(f.graph.view(), &Scenario::empty());
+        let order = order_for(&view);
+        let mut plan = AssignPlan::new(Loader::cch(&view, &order)).with_params(params);
         group.bench_function(BenchmarkId::from_parameter(&label), |b| {
-            b.iter(|| black_box(assign(&view, &demand, hour, None, &params)))
+            b.iter(|| black_box(assign(&view, &demand, hour, None, &mut plan)))
         });
     }
     group.finish();
@@ -232,9 +249,14 @@ fn bench_hour(c: &mut Criterion) {
         let hour = f.hour();
         let demand = DemandSchema::decode(&f.demand_bytes).expect("demand decodes");
         let view = ScenarioView::apply(f.graph.view(), &Scenario::empty());
-        group.bench_function(BenchmarkId::from_parameter(&label), |b| {
-            b.iter(|| black_box(assign(&view, &demand, hour, None, &AssignParams::default())))
-        });
+        let order = order_for(&view);
+        for (kind, zones) in [("full", Zoning::Full), ("coarse", Zoning::coarse())] {
+            let mut plan = AssignPlan::new(Loader::cch(&view, &order)).with_zones(zones);
+            group.bench_function(
+                BenchmarkId::from_parameter(format!("{label}/{kind}")),
+                |b| b.iter(|| black_box(assign(&view, &demand, hour, None, &mut plan))),
+            );
+        }
     }
     group.finish();
 }

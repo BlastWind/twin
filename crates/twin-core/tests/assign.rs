@@ -393,5 +393,9 @@ fn an_added_link_reproduces_braess() {
         .map(|&(id, _)| id)
         .filter(|id| id.is_overlay())
         .collect();
-    assert_eq!(added.len(), 1, "the overlay edge reports under a reserved id");
+    assert_eq!(
+        added.len(),
+        1,
+        "the overlay edge reports under a reserved id"
+    );
 }
