@@ -176,6 +176,80 @@ pub fn point_to_segment_m(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use twin_core::graph_schema::GraphChunkSchema;
+    use twin_core::schema::AlignedBytes;
+    use twin_core::{partition, BBox, RawEdge, RawGraph, RawNode, RoadClass, RoadGraph};
+
+    /// Four nodes in a row 500 m apart at 38.80 N, joined by three edges.
+    fn row() -> (RoadGraph, GridSchema, Vec<AlignedBytes>) {
+        let b = BBox::new(-77.31, 38.80, -77.25, 38.81).expect("bbox is well formed");
+        let step = 500.0 / (111_320.0 * 38.8_f64.to_radians().cos());
+        let nodes: Vec<RawNode> = (0..4)
+            .map(|i| RawNode {
+                lon: b.west + step * i as f64,
+                lat: b.south + 0.0005,
+            })
+            .collect();
+        let edges: Vec<RawEdge> = (0..3)
+            .map(|i| RawEdge {
+                from: i,
+                to: i + 1,
+                len_m: 500.0,
+                class: RoadClass::Residential,
+                lanes: 1,
+                speed_kph: 40.0,
+                capacity_vph: 800.0,
+            })
+            .collect();
+        let grid = GridSchema::cover(b, 20_000.0);
+        let part = partition(&RawGraph::new(nodes, edges), &grid);
+        let encoded: Vec<AlignedBytes> = part
+            .chunks
+            .iter()
+            .map(|c| AlignedBytes::adopt(c.encode()))
+            .collect();
+        let mut graph = RoadGraph::new();
+        for bytes in &encoded {
+            graph
+                .add_chunk(&GraphChunkSchema::decode(bytes).expect("decodes"))
+                .expect("adds");
+        }
+        (graph, grid, encoded)
+    }
+
+    #[test]
+    fn a_point_snaps_to_the_node_it_is_nearest() {
+        let (mut graph, grid, _keep) = row();
+        let index = NodeIndex::new(graph.view(), grid);
+        let step = 500.0 / (111_320.0 * 38.8_f64.to_radians().cos());
+        // Just past node 2, so node 2 wins over node 3.
+        let (dense, d) = index
+            .nearest_within(-77.31 + step * 2.05, 38.8005, 200.0)
+            .expect("something is near");
+        assert_eq!(index.view.nodes()[dense as usize].id.raw(), 2);
+        assert!(d < 30.0, "got {d} m");
+        assert_eq!(
+            index.nearest_within(-77.31, 38.9, 100.0),
+            None,
+            "a point 10 km north snaps to nothing within 100 m"
+        );
+    }
+
+    #[test]
+    fn a_point_beside_the_middle_of_an_edge_snaps_to_that_edge() {
+        let (mut graph, grid, _keep) = row();
+        let index = EdgeIndex::new(graph.view(), grid);
+        let step = 500.0 / (111_320.0 * 38.8_f64.to_radians().cos());
+        // Halfway along edge 1 (node 1 -> node 2), 20 m to the north: nearer to
+        // that edge than to either endpoint, which a node snap would have
+        // picked instead.
+        let (dense, d) = index
+            .nearest_within(-77.31 + step * 1.5, 38.8005 + 20.0 / 111_320.0, 100.0)
+            .expect("something is near");
+        let e = index.view.edges()[dense as usize];
+        assert_eq!((e.from, e.to), (1, 2));
+        assert!((d - 20.0).abs() < 2.0, "got {d} m");
+    }
 
     #[test]
     fn a_point_beside_a_segment_measures_its_perpendicular() {
