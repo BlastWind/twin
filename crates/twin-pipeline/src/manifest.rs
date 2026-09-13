@@ -5,7 +5,10 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use twin_core::counts::VERSION_COUNTS;
+use twin_core::feeds::VERSION_FEEDS;
 use twin_core::schema::{VERSION_CCH_ORDER, VERSION_CHUNK, VERSION_DEMAND, VERSION_INDEX};
+use twin_core::transit::VERSION_TRANSIT;
 use twin_core::{BBox, GridSchema};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +26,61 @@ pub struct ManifestDTO {
     /// Present once the `cch-order` stage has run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cch_order: Option<CchOrderInfoDTO>,
+    /// Present once `ingest-gis` has run. Tile inputs, not a binary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gis: Option<GisInfoDTO>,
+    /// Present once `ingest-gtfs` has run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transit: Option<TransitInfoDTO>,
+    /// Present once `ingest-counts` has run. Named apart from `counts`, which
+    /// is the graph's own node/edge tally.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traffic_counts: Option<CountsInfoDTO>,
+    /// Present once `ingest-crashes` has run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feeds: Option<FeedsInfoDTO>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GisInfoDTO {
+    pub layers: Vec<GisLayerDTO>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GisLayerDTO {
+    pub name: String,
+    pub features: u64,
+    /// Features carrying the attribute the layer exists for.
+    pub attributed: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransitInfoDTO {
+    pub stop_count: u32,
+    pub pattern_count: u32,
+    /// The feeds actually folded in; WMATA is absent without a key.
+    pub agencies: Vec<String>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CountsInfoDTO {
+    pub station_count: u32,
+    /// Stations that found an edge to snap to.
+    pub snapped: u32,
+    pub year: u32,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedsInfoDTO {
+    pub crash_count: u32,
+    pub cell_count: u32,
+    pub edge_count: u32,
+    pub year_min: u32,
+    pub year_max: u32,
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +142,9 @@ pub struct SchemaVersionsDTO {
     pub chunk: u32,
     pub demand: u32,
     pub cch_order: u32,
+    pub transit: u32,
+    pub counts: u32,
+    pub feeds: u32,
 }
 
 impl Default for SchemaVersionsDTO {
@@ -93,6 +154,9 @@ impl Default for SchemaVersionsDTO {
             chunk: VERSION_CHUNK,
             demand: VERSION_DEMAND,
             cch_order: VERSION_CCH_ORDER,
+            transit: VERSION_TRANSIT,
+            counts: VERSION_COUNTS,
+            feeds: VERSION_FEEDS,
         }
     }
 }

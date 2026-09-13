@@ -66,16 +66,14 @@ fn first_pair(geometry: &Value) -> Option<(f64, f64)> {
 }
 
 fn collect_pairs(v: &Value, out: &mut Vec<(f64, f64)>) {
-    match v {
-        Value::Array(a) => match (a.first(), a.get(1)) {
-            (Some(Value::Number(x)), Some(Value::Number(y))) => {
-                if let (Some(x), Some(y)) = (x.as_f64(), y.as_f64()) {
-                    out.push((x, y));
-                }
+    let Value::Array(a) = v else { return };
+    match (a.first(), a.get(1)) {
+        (Some(Value::Number(x)), Some(Value::Number(y))) => {
+            if let (Some(x), Some(y)) = (x.as_f64(), y.as_f64()) {
+                out.push((x, y));
             }
-            _ => a.iter().for_each(|e| collect_pairs(e, out)),
-        },
-        _ => {}
+        }
+        _ => a.iter().for_each(|e| collect_pairs(e, out)),
     }
 }
 
@@ -97,8 +95,8 @@ pub fn pages(dir: &Path) -> Vec<PathBuf> {
 pub fn for_each_feature(dir: &Path, mut f: impl FnMut(FeatureDTO) -> Result<()>) -> Result<usize> {
     let mut n = 0;
     for path in pages(dir) {
-        let text =
-            std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
         let page: PageDTO =
             serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         for feature in page.features {

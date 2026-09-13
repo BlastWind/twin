@@ -52,11 +52,24 @@ pub fn build_gis(raw_dir: &Path, out_dir: &Path) -> Result<GisOutput> {
     }
 
     let layers = vec![
-        normalise(&src.join("buildings"), &dst.join("buildings.geojsonl"), "buildings", building_props)?,
-        normalise(&src.join("parcels"), &dst.join("parcels.geojsonl"), "parcels", |f| {
-            parcel_props(f, &values)
-        })?,
-        normalise(&src.join("zoning"), &dst.join("zoning.geojsonl"), "zoning", zoning_props)?,
+        normalise(
+            &src.join("buildings"),
+            &dst.join("buildings.geojsonl"),
+            "buildings",
+            building_props,
+        )?,
+        normalise(
+            &src.join("parcels"),
+            &dst.join("parcels.geojsonl"),
+            "parcels",
+            |f| parcel_props(f, &values),
+        )?,
+        normalise(
+            &src.join("zoning"),
+            &dst.join("zoning.geojsonl"),
+            "zoning",
+            zoning_props,
+        )?,
     ];
     for l in &layers {
         if l.features == 0 {
@@ -137,7 +150,10 @@ fn parcel_values(dir: &Path) -> Result<HashMap<String, (u32, f64)>> {
     Ok(out)
 }
 
-fn parcel_props(f: &FeatureDTO, values: &HashMap<String, (u32, f64)>) -> Option<Map<String, Value>> {
+fn parcel_props(
+    f: &FeatureDTO,
+    values: &HashMap<String, (u32, f64)>,
+) -> Option<Map<String, Value>> {
     let parcel_id = f.text("PARID")?;
     let assessed = values.get(parcel_id).map(|(_, v)| *v);
     Some(

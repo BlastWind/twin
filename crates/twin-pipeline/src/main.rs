@@ -3,11 +3,17 @@
 //! Implements the `ingest-roads`, `cch-order` and `demand` stages of
 //! DESIGN.md section 4.
 
+mod arcgis;
 mod config;
+mod counts;
+mod crashes;
+mod gis;
 mod graph_io;
+mod gtfs;
 mod lodes;
 mod manifest;
 mod osm;
+mod snap;
 mod stages;
 
 use anyhow::{Context, Result};
@@ -41,6 +47,14 @@ enum Command {
     CchOrder(CommonFlags),
     /// Build zones and the OD matrix, and write demand.bin.
     Demand(DemandFlags),
+    /// Normalise county buildings, parcels and zoning for the tile build.
+    IngestGis(CommonFlags),
+    /// Fold the GTFS feeds into transit.bin.
+    IngestGtfs(CommonFlags),
+    /// Snap VDOT count stations to edges and write counts.bin.
+    IngestCounts(CommonFlags),
+    /// Bin VDOT crashes to the grid and to edges, and write feeds.bin.
+    IngestCrashes(CommonFlags),
 }
 
 /// Flags every post-ingest stage shares: they all read the built graph.
@@ -157,6 +171,10 @@ fn main() -> Result<()> {
         Command::IngestRoads(flags) => ingest_roads(&resolve(flags.into())?),
         Command::CchOrder(flags) => cch_order(&resolve(flags.into())?),
         Command::Demand(flags) => demand(&resolve(flags.into())?),
+        Command::IngestGis(flags) => ingest_gis(&resolve(flags.into())?),
+        Command::IngestGtfs(flags) => ingest_gtfs(&resolve(flags.into())?),
+        Command::IngestCounts(flags) => ingest_counts(&resolve(flags.into())?),
+        Command::IngestCrashes(flags) => ingest_crashes(&resolve(flags.into())?),
     }
 }
 
@@ -190,6 +208,161 @@ fn post_ingest_stage<T>(
     man.write(&man_path)?;
     eprintln!("  manifest               {}", man_path.display());
     Ok(())
+}
+
+/// The `gis` stage writes GeoJSON for the tile build, not a `*.bin`, so it does
+/// not need the graph and does not go through `post_ingest_stage`.
+fn ingest_gis(cfg: &PipelineConfig) -> Result<()> {
+    eprintln!("ingest-gis");
+    let mut stages: Vec<StageDTO> = Vec::new();
+    let out = stage(&mut stages, "normalise", || {
+        gis::build_gis(&cfg.raw_dir, &cfg.out_dir)
+    })?;
+    for l in &out.layers {
+        eprintln!(
+            "    {:<22} {} features, {} attributed",
+            l.name, l.features, l.attributed
+        );
+    }
+    for note in &out.notes {
+        eprintln!("    {note}");
+    }
+    let man_path = cfg.out_dir.join("manifest.json");
+    let mut man = ManifestDTO::load(&man_path)?;
+    man.upsert_stages(stages);
+    man.gis = Some(GisInfoDTO {
+        layers: out
+            .layers
+            .iter()
+            .map(|l| GisLayerDTO {
+                name: l.name.to_string(),
+                features: l.features,
+                attributed: l.attributed,
+            })
+            .collect(),
+        notes: out.notes,
+    });
+    man.write(&man_path)?;
+    eprintln!("  manifest               {}", man_path.display());
+    Ok(())
+}
+
+/// Write one GeoJSON sidecar for the tile build next to the binaries.
+fn write_geojsonl(cfg: &PipelineConfig, name: &str, body: &str) -> Result<()> {
+    let dir = cfg.out_dir.join("gis");
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let path = dir.join(format!("{name}.geojsonl"));
+    std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))
+}
+
+fn ingest_gtfs(cfg: &PipelineConfig) -> Result<()> {
+    post_ingest_stage(
+        cfg,
+        "ingest-gtfs",
+        |stages, loaded| {
+            let grid = loaded.grid;
+            let out = stage(stages, "patterns+headways", || {
+                gtfs::build_gtfs(&cfg.raw_dir, loaded, grid)
+            })?;
+            for note in &out.notes {
+                eprintln!("    {note}");
+            }
+            eprintln!(
+                "    transit                {} stops, {} patterns, agencies [{}], {:.2} MiB",
+                out.stop_count,
+                out.pattern_count,
+                out.agencies.join(", "),
+                out.bytes.len() as f64 / (1024.0 * 1024.0)
+            );
+            let path = cfg.out_dir.join("transit.bin");
+            std::fs::write(&path, &out.bytes)
+                .with_context(|| format!("writing {}", path.display()))?;
+            write_geojsonl(cfg, "transit_routes", &out.routes_geojsonl)?;
+            write_geojsonl(cfg, "transit_stops", &out.stops_geojsonl)?;
+            let file = FileDTO::of("transit.bin", &out.bytes);
+            Ok((out, file))
+        },
+        |man, out| {
+            man.transit = Some(TransitInfoDTO {
+                stop_count: out.stop_count,
+                pattern_count: out.pattern_count,
+                agencies: out.agencies.clone(),
+                notes: out.notes.clone(),
+            })
+        },
+    )
+}
+
+fn ingest_counts(cfg: &PipelineConfig) -> Result<()> {
+    post_ingest_stage(
+        cfg,
+        "ingest-counts",
+        |stages, loaded| {
+            let grid = loaded.grid;
+            let out = stage(stages, "snap-stations", || {
+                counts::build_counts(&cfg.raw_dir, loaded, grid)
+            })?;
+            for note in &out.notes {
+                eprintln!("    {note}");
+            }
+            eprintln!(
+                "    counts                 {} stations, {} snapped, {} vintage",
+                out.station_count, out.snapped, out.year
+            );
+            let path = cfg.out_dir.join("counts.bin");
+            std::fs::write(&path, &out.bytes)
+                .with_context(|| format!("writing {}", path.display()))?;
+            write_geojsonl(cfg, "counts", &out.geojsonl)?;
+            let file = FileDTO::of("counts.bin", &out.bytes);
+            Ok((out, file))
+        },
+        |man, out| {
+            man.traffic_counts = Some(CountsInfoDTO {
+                station_count: out.station_count,
+                snapped: out.snapped,
+                year: out.year,
+                notes: out.notes.clone(),
+            })
+        },
+    )
+}
+
+fn ingest_crashes(cfg: &PipelineConfig) -> Result<()> {
+    let bbox = cfg.bbox;
+    post_ingest_stage(
+        cfg,
+        "ingest-crashes",
+        |stages, loaded| {
+            let grid = loaded.grid;
+            let out = stage(stages, "bin-crashes", || {
+                crashes::build_crashes(&cfg.raw_dir, loaded, bbox, grid)
+            })?;
+            for note in &out.notes {
+                eprintln!("    {note}");
+            }
+            eprintln!(
+                "    crashes                {} points {}-{}, {} cells, {} edges",
+                out.crash_count, out.years.0, out.years.1, out.cell_count, out.edge_count
+            );
+            let path = cfg.out_dir.join("feeds.bin");
+            std::fs::write(&path, &out.bytes)
+                .with_context(|| format!("writing {}", path.display()))?;
+            write_geojsonl(cfg, "crashes", &out.points_geojsonl)?;
+            write_geojsonl(cfg, "crash_grid", &out.grid_geojsonl)?;
+            let file = FileDTO::of("feeds.bin", &out.bytes);
+            Ok((out, file))
+        },
+        |man, out| {
+            man.feeds = Some(FeedsInfoDTO {
+                crash_count: out.crash_count,
+                cell_count: out.cell_count,
+                edge_count: out.edge_count,
+                year_min: out.years.0,
+                year_max: out.years.1,
+                notes: out.notes.clone(),
+            })
+        },
+    )
 }
 
 fn cch_order(cfg: &PipelineConfig) -> Result<()> {
@@ -344,6 +517,10 @@ fn ingest_roads(cfg: &PipelineConfig) -> Result<()> {
         // A fresh network invalidates both; they are rebuilt by their stages.
         demand: None,
         cch_order: None,
+        gis: None,
+        transit: None,
+        traffic_counts: None,
+        feeds: None,
     };
     let man_path = cfg.out_dir.join("manifest.json");
     man.write(&man_path)?;

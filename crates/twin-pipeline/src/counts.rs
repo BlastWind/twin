@@ -31,7 +31,11 @@ pub struct CountsOutput {
     pub notes: Vec<String>,
 }
 
-pub fn build_counts(raw_dir: &Path, loaded: &mut LoadedGraph, grid: GridSchema) -> Result<CountsOutput> {
+pub fn build_counts(
+    raw_dir: &Path,
+    loaded: &mut LoadedGraph,
+    grid: GridSchema,
+) -> Result<CountsOutput> {
     let dir = raw_dir.join("gis").join("counts");
     let index = EdgeIndex::new(loaded.graph.view(), grid);
 
