@@ -34,9 +34,10 @@ wasm (transit.rs): `loadTransit(bytes)`, `isochrone(lon, lat, hour, budgetMin) -
 wasm threads (2.5): if wasm-bindgen-rayon is adopted, the web app must serve `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`; web agent adds these to vite config now.
 
 ## Phase 3 pipeline outcome (2026-09-13)
-Real county data end to end. Buildings 282,839 (every one with a height, LiDAR
-`BLDG_HEIGHT` in feet or roof-minus-ground); parcels 369,395 joined across three
-tables on the parcel id, 100 % with land use and assessed value; zoning 6,444.
+Real county data end to end. Buildings 282,839, about 90 % of them with a height
+(LiDAR `BLDG_HEIGHT` in feet, or roof minus ground elevation where the 2024
+planimetric batch left it null); parcels 369,395 joined across three tables on
+the parcel id, effectively all with land use and assessed value; zoning 6,444.
 Transit 3,304 stops and 218 patterns from Fairfax Connector and CUE; WMATA needs
 `TWIN_WMATA_KEY` and is skipped without it. VDOT 2023 AADT 26,051 stations,
 25,999 snapped within 250 m. TREDS crashes 79,626 for 2023-2026, 10,242 grid
