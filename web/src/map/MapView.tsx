@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useUiStore } from '../state/stores'
 import { mark } from '../perf'
 import { FAIRFAX_CAMERA, LAYER_REGISTRY, buildStyle, mapLayerIds, type LayerVisibility } from './layers'
+import { setMap, type MapHandle } from './mapRef'
 
 /** MapLibre is ~200 KB gz: kept out of the shell by lazy-importing here. */
 const createMap = async (container: HTMLDivElement, visibility: LayerVisibility) => {
@@ -19,8 +20,6 @@ const createMap = async (container: HTMLDivElement, visibility: LayerVisibility)
     attributionControl: { compact: true },
   })
 }
-
-export type MapHandle = { readonly setVisibility: (v: LayerVisibility) => void }
 
 export const MapView = () => {
   const container = useRef<HTMLDivElement>(null)
@@ -46,10 +45,12 @@ export const MapView = () => {
         ;(globalThis as { __twinMapReady?: boolean }).__twinMapReady = true
       })
       ;(globalThis as { __twinMap?: unknown }).__twinMap = map
+      setMap(map as unknown as MapHandle)
       return undefined
     })
     return () => {
       disposed = true
+      setMap(null)
       mapRef.current?.remove()
       mapRef.current = null
     }

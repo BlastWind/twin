@@ -6,6 +6,11 @@ export type LoadStage =
   | 'map-idle'
   | 'worker-start'
   | 'worker-ready'
+  | 'manifest'
+  | 'index'
+  | 'chunks'
+  | 'first-baseline'
+  | 'overlay-ready'
 
 export type StageTiming = { readonly stage: LoadStage; readonly atMs: number }
 

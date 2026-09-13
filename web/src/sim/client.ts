@@ -17,7 +17,6 @@ import {
 } from './protocol'
 import {
   chunkIx,
-  chunkKey,
   chunkPath,
   chunksInArea,
   orderByDistance,
@@ -144,7 +143,8 @@ export const createSimClient = (): SimClient => {
         },
       })
       useWorldStore.getState().dropGeometry(toFree)
-      toFree.forEach(([]) => undefined)
+      // the freed chunk buffers are the bulk of the LRU; drop it rather than
+      // hold bytes for cells the worker no longer knows about
       loader.clear()
     }
     resident = wanted
@@ -187,4 +187,14 @@ export const createSimClient = (): SimClient => {
   }
 }
 
-export { chunkKey }
+/**
+ * The app runs exactly one worker, and the panels are siblings of the component
+ * that starts it, so the handle lives here rather than in a React context.
+ */
+let active: SimClient | null = null
+
+export const setSimClient = (client: SimClient | null): void => {
+  active = client
+}
+
+export const getSimClient = (): SimClient | null => active

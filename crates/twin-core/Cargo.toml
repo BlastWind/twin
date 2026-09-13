@@ -8,3 +8,9 @@ description = "Pure graph + binary-schema core for the twin digital-twin project
 [dependencies]
 bytemuck = { workspace = true }
 thiserror = { workspace = true }
+cch = "0.3.0"
+
+# Origins are independent, so all-or-nothing loading forks over them natively.
+# wasm32 has no threads here, and `assign` falls back to a serial loop.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = "1.10"

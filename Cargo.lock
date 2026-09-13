@@ -159,6 +159,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cch"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15568834f8c95df9da186c4088b4b201e924dc051e87806be0968b6a0eec363b"
+dependencies = [
+ "memmap2 0.9.11",
+ "rayon",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -546,6 +556,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "memmap2"
+version = "0.9.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -590,7 +609,7 @@ checksum = "5d689d6e9f254bbd63893ce00a27147e41fe94bf3abca70f85b5345afb3cb728"
 dependencies = [
  "byteorder",
  "flate2",
- "memmap2",
+ "memmap2 0.5.10",
  "protobuf",
  "protobuf-codegen",
  "rayon",
@@ -993,6 +1012,8 @@ name = "twin-core"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "cch",
+ "rayon",
  "thiserror 2.0.20",
 ]
 

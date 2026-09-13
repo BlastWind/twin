@@ -1,0 +1,161 @@
+/* Panel chrome. The map owns the page; every panel floats over it. */
+:root {
+  --bg: rgba(16, 20, 27, 0.9);
+  --edge: #232a35;
+  --ink: #e6e9ef;
+  --dim: #99a3b4;
+  --accent: #4d9df6;
+  --warn: #d63e33;
+}
+
+.panel {
+  background: var(--bg);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--ink);
+  backdrop-filter: blur(6px);
+}
+
+.panel h2 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dim);
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.panel h2 .sub { font-size: 10px; text-transform: none; letter-spacing: 0; }
+
+.left-rail,
+.right-rail {
+  position: absolute;
+  top: 12px;
+  bottom: 84px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 240px;
+  overflow: auto;
+  z-index: 2;
+}
+.left-rail { left: 12px; }
+.right-rail { right: 12px; top: 120px; width: 260px; }
+
+button {
+  font: inherit;
+  color: var(--ink);
+  background: #1b212b;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: 4px 9px;
+  cursor: pointer;
+}
+button:hover { border-color: #37414f; }
+button:disabled { opacity: 0.4; cursor: default; }
+button.on { border-color: var(--accent); color: var(--accent); }
+button.danger { border-color: #5d2a26; color: #ff8d80; }
+button.link { background: none; border: none; color: var(--dim); text-decoration: underline; padding: 2px 4px; }
+
+.row { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.hint { color: var(--dim); margin: 4px 0; font-size: 11px; }
+
+/* ---- scrubber ---- */
+.scrubber {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  z-index: 3;
+}
+.scrubber .play { width: 34px; }
+.scrub-body { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.scrub-body input[type='range'] { width: 100%; accent-color: var(--accent); }
+.ticks { display: flex; gap: 0; padding: 0 6px; }
+.tick { flex: 1; height: 3px; margin-right: 1px; background: #2b3340; border-radius: 2px; }
+.tick.on { background: var(--accent); }
+.clock { font: 12px/1 ui-monospace, Menlo, monospace; min-width: 44px; }
+.modes { display: flex; gap: 4px; }
+.status { color: var(--dim); font-size: 11px; min-width: 56px; }
+.status.running { color: var(--accent); }
+
+/* ---- tooltip ---- */
+.tooltip {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  background: var(--bg);
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 11px;
+  min-width: 150px;
+}
+.tt-head { font-weight: 600; margin-bottom: 4px; }
+.tt-class { color: var(--dim); font-weight: 400; }
+.tooltip dl { display: grid; grid-template-columns: auto 1fr; gap: 1px 10px; margin: 0; }
+.tooltip dt { color: var(--dim); }
+.tooltip dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ---- editor ---- */
+.edit-form { display: flex; flex-direction: column; gap: 6px; }
+.edit-head { display: flex; justify-content: space-between; align-items: center; font-size: 11px; }
+.edit-form label { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px; color: var(--dim); }
+.edit-form input {
+  width: 84px;
+  font: inherit;
+  color: var(--ink);
+  background: #12161d;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+.edits { list-style: none; margin: 8px 0 0; padding: 0; max-height: 120px; overflow: auto; font-size: 11px; }
+.edits li { padding: 2px 0; cursor: pointer; color: var(--dim); }
+.edits li:hover { color: var(--ink); }
+
+/* ---- dashboard ---- */
+.cards { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+.card { display: flex; flex-direction: column; background: #12161d; border-radius: 6px; padding: 6px; }
+.card-label { font-size: 10px; color: var(--dim); }
+.card-value { font-size: 14px; font-variant-numeric: tabular-nums; }
+.card-unit { font-size: 9px; color: var(--dim); }
+.delta { font-size: 10px; color: var(--dim); }
+.delta.up { color: #ff8d80; }
+.delta.down { color: #6fd08c; }
+
+.top-edges { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; }
+.top-edges th { text-align: left; color: var(--dim); font-weight: 500; padding-bottom: 3px; }
+.top-edges td { padding: 2px 0; font-variant-numeric: tabular-nums; }
+.top-edges tbody tr { cursor: pointer; }
+.top-edges tbody tr:hover td { color: var(--accent); }
+
+/* ---- study-area draw ---- */
+.draw-box {
+  position: absolute;
+  z-index: 4;
+  border: 1px dashed var(--accent);
+  background: rgba(77, 157, 246, 0.12);
+  pointer-events: none;
+}
+
+.toast {
+  position: absolute;
+  bottom: 84px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  background: #33161a;
+  border: 1px solid #5d2a26;
+  color: #ffb3aa;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 11px;
+}
