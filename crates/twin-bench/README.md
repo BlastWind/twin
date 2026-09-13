@@ -78,6 +78,48 @@ three ways to move the line, in order of expected payoff:
    primitive, and its one-to-many (939 µs to 1,415 pinned targets) returns
    distances without the tree the loading needs.
 
+## Phase 2.5 results (2026-09-13)
+
+County hour 08, the real `data/build`: 75,705 nodes, 165,545 directed edges,
+1,415 zones. "first" is a cold run, "warm" the same hour again with the
+previous volumes as a seed and the hierarchy already built.
+
+| Configuration | full zones | coarse zones (~400) |
+|---|---|---|
+| Native, 16 threads | 4.1 s | **2.5 s** |
+| Native, 1 thread | 22.5 s | 10.4 s |
+| wasm, 1 thread, node 20 | 29.5 s (warm 15.2 s) | 12.2 s (warm 7.8 s) |
+| wasm, 8 threads, headless Chromium | 7.1 s (warm 3.2 s) | **3.4 s (warm 1.7 s)** |
+| Radius-4 study area, native | 0.17 s | — |
+
+Reproduce with `cargo run --release -p twin-bench --bin hour [radius]
+[cch|dijkstra] [coarse]`, `node crates/twin-bench/wasm-hour.mjs
+[full|coarse] [hour]` and `node crates/twin-bench/wasm-hour-mt.mjs
+[full|coarse] [hour] [threads]`.
+
+**Is the 2 s target met? Only warm, and only with coarse zones and >= 8
+threads** — 1.7 s. A cold county run is 3.4 s in the browser, of which ~0.6 s
+is building the hierarchy. Full zoning does not fit in the browser at all
+(3.2 s warm at best), and the single-threaded build does not fit at any
+zoning. The radius-4 default study area, meanwhile, is now 0.17 s native and
+comfortable either way.
+
+Where the 8x serial gain came from, measured one change at a time:
+
+| Change | County hour 08, serial |
+|---|---|
+| Baseline (per-origin Dijkstra, full zones) | 83.8 s |
+| CCH one-to-all sweeps instead of Dijkstra trees | 43.9 s |
+| Tree recovery as a cached back-walk, integer BPR powers | 22.5 s |
+| Coarse zones (~400 loading points) | 10.4 s |
+
+Per origin on the county, at free-flow costs: the one-to-all sweep is 0.92 ms
+and recovering and loading the tree 0.08 ms, against 8.5 ms for a Dijkstra
+tree. Threads then multiply what is left; the browser gets ~5x out of 8.
+
+Numbers were taken with a load average of ~2 from concurrent work on the same
+box, so treat them as a floor, not a record.
+
 ## Phase 2.5 baseline (2026-09-13, re-measured)
 
 Re-run of `cargo run --release -p twin-bench --bin hour` on the same box before

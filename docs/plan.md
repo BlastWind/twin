@@ -42,3 +42,28 @@ Transit 3,304 stops and 218 patterns from Fairfax Connector and CUE; WMATA needs
 `TWIN_WMATA_KEY` and is skipped without it. VDOT 2023 AADT 26,051 stations,
 25,999 snapped within 250 m. TREDS crashes 79,626 for 2023-2026, 10,242 grid
 cells, 26,003 edges. `world.pmtiles` is 98 MiB with all ten layers.
+
+## Phase 2.5 outcome (2026-09-13)
+
+County hour 08 went from 83.8 s serial / 13.3 s on 16 threads to 10.4 s / 2.5 s,
+and to **1.7 s warm in the browser** on 8 threads with coarse zones (3.4 s
+cold). The 2 s target is met only under those settings; full zoning in the
+browser is 3.2 s warm at best, and the single-threaded build does not fit at any
+zoning. `crates/twin-bench/README.md` has the table and the per-change
+attribution.
+
+1. CCH tree extraction: done without forking `cch`. A PHAST-style one-to-all
+   sweep over the public `CchView`/`MetricView`, and the tree recovered from the
+   distances (`dist[u] + w == dist[v]`, exact on integer weights) by a
+   generation-stamped back-walk, so no shortcut is ever unpacked. 8.5 ms -> 1.0 ms
+   per origin on the county.
+2. Zone aggregation: `Zoning::Coarse`, ~400 clusters, exposed as
+   `runHour`'s `{"zones": "full" | "coarse"}`. VMT moves 0.9 %.
+3. Threads: `wasm-bindgen-rayon` behind a `threads` feature; both variants build
+   to `web/public/wasm` and `web/public/wasm-mt`. COOP/COEP requirements are in
+   `crates/twin-wasm/README.md`. ~5x out of 8 threads.
+4. AddEdge: overlay edges with ids from a reserved range; the hierarchy is
+   rebuilt for the new arc set (~100 ms) rather than approximated.
+
+Still open: a cold county run is 3.4 s, of which ~0.6 s is the hierarchy build,
+which nothing yet caches across sessions.
