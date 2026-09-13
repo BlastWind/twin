@@ -70,6 +70,111 @@ for name in od/va_od_main_JT00_2023.csv.gz od/va_od_aux_JT00_2023.csv.gz va_xwal
   fi
 done
 
+# --- Fairfax County GIS + VDOT, via the ArcGIS REST API ---------------------
+# Every layer below was found through the ArcGIS Hub / AGOL search API and
+# verified with `?f=json`. Two hosting orgs:
+#   ioennV6PpG5Xodq0  Fairfax County GIS (buildings, parcels, zoning)
+#   p5v98VHDX9Atv3l7  VDOT (traffic volume, TREDS crashes)
+# The county layers stop at the county line, so the independent cities
+# (Fairfax City, Falls Church) come out empty. That is the documented scope.
+FFX="https://services1.arcgis.com/ioennV6PpG5Xodq0/arcgis/rest/services"
+VDOT="https://services.arcgis.com/p5v98VHDX9Atv3l7/ArcGIS/rest/services"
+BUILDINGS_URL="$FFX/Buildings/FeatureServer/0"                  # BLDG_HEIGHT, TOP_ELEV, GROUND_ELEV
+PARCELS_URL="$FFX/OpenData_A6/FeatureServer/1"                  # PARID, LUC_DESC, ZONING_DESC
+PARCEL_VALUES_URL="$FFX/OpenData_A6/FeatureServer/2"            # PARID, APRTOT (tabular)
+ZONING_URL="$FFX/Zoning/FeatureServer/0"                        # ZONECODE, ZONETYPE
+COUNTS_URL="$VDOT/VDOT_Traffic_Volume_2024/FeatureServer/0"     # ADT, AAWDT, ROUTE_COMMON_NAME
+CRASHES_URL="$VDOT/Full_Crash/FeatureServer/0"                  # CRASH_YEAR, CRASH_SEVERITY, LAT/LON
+
+GIS_DIR="$RAW_DIR/gis"
+PAGE_SIZE=2000
+CRASH_YEAR_MIN="$(( $(date +%Y) - 3 ))"
+
+# Page a FeatureServer layer into $GIS_DIR/<name>/page_NNNNN.geojson.
+#   arcgis_dump <name> <url> <where> [geometry?]
+# resultOffset paging, one file per page so an interrupted run resumes. A page
+# with no features ends the walk; `exceededTransferLimit` is not relied on
+# because not every VDOT layer sets it.
+arcgis_dump() {
+  local name="$1" url="$2" where="$3" clip="${4:-yes}"
+  local dir="$GIS_DIR/$name"
+  mkdir -p "$dir"
+  local offset=0 page=0 total=0
+  while :; do
+    local out
+    out="$(printf '%s/page_%05d.geojson' "$dir" "$page")"
+    if [[ -s "$out" ]]; then
+      local n; n="$(python3 -c "import json,sys;print(len(json.load(open(sys.argv[1])).get('features',[])))" "$out" 2>/dev/null || echo 0)"
+      total=$(( total + n )); page=$(( page + 1 )); offset=$(( offset + PAGE_SIZE ))
+      [[ "$n" -lt "$PAGE_SIZE" ]] && break || continue
+    fi
+    local args=(-sS -m 300 -G "$url/query"
+      --data-urlencode "where=$where"
+      --data-urlencode "outFields=*"
+      --data-urlencode "outSR=4326"
+      --data-urlencode "f=geojson"
+      --data-urlencode "resultOffset=$offset"
+      --data-urlencode "resultRecordCount=$PAGE_SIZE")
+    if [[ "$clip" == "yes" ]]; then
+      args+=(--data-urlencode "geometry=$BBOX"
+             --data-urlencode "geometryType=esriGeometryEnvelope"
+             --data-urlencode "inSR=4326"
+             --data-urlencode "spatialRel=esriSpatialRelIntersects")
+    fi
+    if ! curl "${args[@]}" -o "$out.part"; then
+      rm -f "$out.part"
+      echo "error   $name page $page failed; the ingest stage will use what is on disk" >&2
+      return 1
+    fi
+    mv "$out.part" "$out"
+    local n; n="$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(len(d.get('features',[])) if 'error' not in d else -1)" "$out" 2>/dev/null || echo -1)"
+    if [[ "$n" -lt 0 ]]; then
+      echo "error   $name page $page: $(head -c 300 "$out")" >&2; rm -f "$out"; return 1
+    fi
+    total=$(( total + n ))
+    printf '\r  %-16s %7d features' "$name" "$total" >&2
+    [[ "$n" -lt "$PAGE_SIZE" ]] && break
+    page=$(( page + 1 )); offset=$(( offset + PAGE_SIZE ))
+  done
+  printf '\r  %-16s %7d features\n' "$name" "$total" >&2
+}
+
+if [[ "${TWIN_SKIP_GIS:-0}" != "1" ]]; then
+  echo "arcgis  Fairfax County GIS + VDOT -> $GIS_DIR"
+  arcgis_dump buildings     "$BUILDINGS_URL"     "1=1" || true
+  arcgis_dump parcels       "$PARCELS_URL"       "1=1" || true
+  arcgis_dump parcel_values "$PARCEL_VALUES_URL" "1=1" no || true
+  arcgis_dump zoning        "$ZONING_URL"        "1=1" || true
+  arcgis_dump counts        "$COUNTS_URL"        "1=1" || true
+  arcgis_dump crashes       "$CRASHES_URL"       "CRASH_YEAR >= $CRASH_YEAR_MIN" || true
+fi
+
+# --- GTFS -------------------------------------------------------------------
+# Fairfax Connector and CUE are open. WMATA needs a developer key; without
+# TWIN_WMATA_KEY it is skipped with a warning and the transit network is just
+# the two local operators.
+GTFS_DIR="$RAW_DIR/gtfs"
+mkdir -p "$GTFS_DIR"
+fetch_gtfs() {
+  local name="$1" url="$2"; shift 2
+  local out="$GTFS_DIR/$name.zip"
+  if [[ -s "$out" ]]; then echo "have    $out ($(du -h "$out" | cut -f1))"; return 0; fi
+  if curl -fL --retry 3 --connect-timeout 20 -m 300 "$@" -o "$out.part" "$url"; then
+    mv "$out.part" "$out"; echo "saved   $out ($(du -h "$out" | cut -f1))"
+  else
+    rm -f "$out.part"; echo "error   $name GTFS download failed; skipping that agency" >&2
+  fi
+}
+fetch_gtfs connector "https://www.fairfaxcounty.gov/connector/sites/connector/files/Assets/connector_gtfs.zip"
+fetch_gtfs cue       "https://www.fairfaxva.gov/files/assets/city/v/2/public-works/documents/schedules-and-maps/cue-gtfs.zip"
+if [[ -n "${TWIN_WMATA_KEY:-}" ]]; then
+  fetch_gtfs wmata_bus  "https://api.wmata.com/gtfs/bus-gtfs-static.zip"  -H "api_key: $TWIN_WMATA_KEY"
+  fetch_gtfs wmata_rail "https://api.wmata.com/gtfs/rail-gtfs-static.zip" -H "api_key: $TWIN_WMATA_KEY"
+else
+  echo "warn    TWIN_WMATA_KEY is unset; skipping WMATA bus and rail GTFS." >&2
+  echo "        Get a key at developer.wmata.com and re-run to include Metro." >&2
+fi
+
 TARGET="$CLIPPED"
 [[ -f "$TARGET" ]] || TARGET="$FULL"
 echo
@@ -77,3 +182,8 @@ echo "next    cargo run --release -p twin-pipeline -- \\"
 echo "          ingest-roads --pbf $TARGET --bbox $BBOX --out data/build/"
 echo "        cargo run --release -p twin-pipeline -- cch-order"
 echo "        cargo run --release -p twin-pipeline -- demand"
+echo "        cargo run --release -p twin-pipeline -- ingest-gis"
+echo "        cargo run --release -p twin-pipeline -- ingest-gtfs"
+echo "        cargo run --release -p twin-pipeline -- ingest-counts"
+echo "        cargo run --release -p twin-pipeline -- ingest-crashes"
+echo "        scripts/build-tiles.sh --force"

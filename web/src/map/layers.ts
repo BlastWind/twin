@@ -105,6 +105,117 @@ const roadColor = () =>
     '#5c6675',
   ] as unknown as never
 
+
+// --------------------------------------------------------------- land use
+
+/**
+ * Zoning categories, in a fixed order that is also the colour order: a hue
+ * belongs to a category forever, never to its rank in whatever the viewport
+ * happens to contain. The seven hues are the validated dark-surface
+ * categorical slots (adjacent-pair CVD dE >= 8, contrast >= 3:1 on #0e1116);
+ * `other` is the residual bucket and is deliberately gray.
+ */
+export type ZoneCategory =
+  | 'residential'
+  | 'commercial'
+  | 'industrial'
+  | 'institutional'
+  | 'mixed_use'
+  | 'agricultural'
+  | 'open_space'
+  | 'other'
+
+export const ZONE_COLORS: Readonly<Record<ZoneCategory, string>> = {
+  residential: '#3987e5',
+  commercial: '#d95926',
+  industrial: '#9085e9',
+  institutional: '#199e70',
+  mixed_use: '#c98500',
+  agricultural: '#d55181',
+  open_space: '#008300',
+  other: '#6f7783',
+}
+
+export const ZONE_CATEGORIES = Object.keys(ZONE_COLORS) as readonly ZoneCategory[]
+
+export const zoneCategory = (raw: string | null | undefined): ZoneCategory =>
+  raw && raw in ZONE_COLORS ? (raw as ZoneCategory) : 'other'
+
+const zoneColor = () =>
+  [
+    'match',
+    ['get', 'category'],
+    ...ZONE_CATEGORIES.flatMap((c) => [c, ZONE_COLORS[c]]),
+    ZONE_COLORS.other,
+  ] as unknown as never
+
+// ---------------------------------------------------------------- transit
+
+/**
+ * GTFS `route_color` is six hex digits with no `#`. Agencies leave it blank
+ * often enough that the fallback matters more than the colour does.
+ */
+const TRANSIT_FALLBACK = '#8fb6e8'
+
+const routeColor = () =>
+  [
+    'case',
+    ['==', ['coalesce', ['get', 'color'], ''], ''],
+    TRANSIT_FALLBACK,
+    ['concat', '#', ['get', 'color']],
+  ] as unknown as never
+
+const routeWidth = () =>
+  ['interpolate', ['exponential', 1.5], ['zoom'], 10, 1, 14, 2.5, 17, 6] as unknown as never
+
+// ------------------------------------------------------------------ feeds
+
+/** Points from here up, grid below (DESIGN 7.2). */
+export const CRASH_POINT_ZOOM: Zoom = 12 as Zoom
+
+const CRASH_COLOR = '#d95926'
+const COUNT_COLOR = '#3987e5'
+
+/** severity 1 (minor) .. 5 (fatal) — ordinal, so it drives radius, not hue. */
+const crashRadius = () =>
+  [
+    'interpolate',
+    ['linear'],
+    ['zoom'],
+    12, ['interpolate', ['linear'], ['to-number', ['get', 'severity'], 1], 1, 1.5, 5, 4],
+    17, ['interpolate', ['linear'], ['to-number', ['get', 'severity'], 1], 1, 4, 5, 12],
+  ] as unknown as never
+
+/**
+ * Crash counts per grid cell: one hue, light -> dark reversed for a dark
+ * surface, so more crashes read as brighter.
+ */
+const CRASH_COUNT_STEPS: readonly (readonly [number, string])[] = [
+  [0, '#3a2118'],
+  [5, '#6d3a20'],
+  [15, '#a44d1f'],
+  [40, '#d95926'],
+  [100, '#f08b5e'],
+]
+
+const crashCountColor = () =>
+  [
+    'interpolate',
+    ['linear'],
+    ['to-number', ['get', 'count'], 0],
+    ...CRASH_COUNT_STEPS.flatMap(([n, c]) => [n, c]),
+  ] as unknown as never
+
+/** sqrt-scaled radius: area, not radius, should track AADT. */
+const aadtRadius = () =>
+  [
+    'interpolate',
+    ['linear'],
+    ['zoom'],
+    9, ['interpolate', ['linear'], ['sqrt', ['to-number', ['get', 'aadt'], 0]], 0, 1.5, 400, 7],
+    16, ['interpolate', ['linear'], ['sqrt', ['to-number', ['get', 'aadt'], 0]], 0, 4, 400, 22],
+  ] as unknown as never
+
 export const LAYER_REGISTRY: readonly LayerEntry[] = [
   {
     id: 'roads',
@@ -282,11 +393,35 @@ export const mapLayerIds = (entry: LayerEntry): readonly string[] =>
 
 export type LayerVisibility = Readonly<Record<LayerId, boolean>>
 
-export const defaultVisibility = (): LayerVisibility =>
-  Object.fromEntries(LAYER_REGISTRY.map((l) => [l.id, l.available && l.visibleByDefault])) as LayerVisibility
+/**
+ * Which source layers the tiles actually contain, from the PMTiles metadata's
+ * `vector_layers`. A layer the pipeline has not emitted yet is *hidden*, not
+ * broken: MapLibre would otherwise keep a live layer pointed at a source-layer
+ * that never yields a feature, and the panel would offer a toggle that does
+ * nothing.
+ */
+export type SourceLayerSet = ReadonlySet<SourceLayerName>
+
+/** Everything the Phase-1/2 tiles are known to have; the pre-probe assumption. */
+export const KNOWN_SOURCE_LAYERS: SourceLayerSet = new Set<SourceLayerName>(['transportation', 'building'])
+
+export const withAvailability = (
+  present: SourceLayerSet,
+  registry: readonly LayerEntry[] = LAYER_REGISTRY,
+): readonly LayerEntry[] => registry.map((e) => (e.available === present.has(e.sourceLayer) ? e : { ...e, available: present.has(e.sourceLayer) }))
+
+export const availableLayers = (registry: readonly LayerEntry[]): readonly LayerEntry[] =>
+  registry.filter((e) => e.available)
+
+export const defaultVisibility = (registry: readonly LayerEntry[] = LAYER_REGISTRY): LayerVisibility =>
+  Object.fromEntries(registry.map((l) => [l.id, l.available && l.visibleByDefault])) as LayerVisibility
 
 /** Pure: registry + visibility -> a complete MapLibre style. */
-export const buildStyle = (visibility: LayerVisibility, pmtilesUrl = WORLD_PMTILES_URL): StyleSpecification => ({
+export const buildStyle = (
+  visibility: LayerVisibility,
+  registry: readonly LayerEntry[] = LAYER_REGISTRY,
+  pmtilesUrl = WORLD_PMTILES_URL,
+): StyleSpecification => ({
   version: 8,
   glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
   sources: {
@@ -294,7 +429,7 @@ export const buildStyle = (visibility: LayerVisibility, pmtilesUrl = WORLD_PMTIL
   },
   layers: [
     { id: 'background', type: 'background', paint: { 'background-color': '#0e1116' } },
-    ...LAYER_REGISTRY.flatMap((entry) =>
+    ...availableLayers(registry).flatMap((entry) =>
       entry.lod
         ? entry.lod.map((g) => toMapLibreLayer(entry, visibility[entry.id], g))
         : [toMapLibreLayer(entry, visibility[entry.id])],
