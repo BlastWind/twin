@@ -21,14 +21,21 @@ type MetricName =
   | 'firstTileMs'
   | 'mapIdleMs'
   | 'workerReadyMs'
+  | 'firstBaselineMs'
   | 'heapBytesAfterLoad'
+  | 'heapBytesAfter24h'
   | 'transferBytes'
+  | 'workerMessageBytes'
+  | 'overlayPaths'
   | 'fpsZ11'
   | 'fpsZ13'
   | 'fpsZ15'
 
 /** Higher-is-better metrics regress when they *fall*; the rest when they rise. */
 const HIGHER_IS_BETTER: ReadonlySet<MetricName> = new Set<MetricName>(['fpsZ11', 'fpsZ13', 'fpsZ15'])
+
+/** Counts, not costs: they document the run rather than gate it. */
+const INFORMATIONAL: ReadonlySet<MetricName> = new Set<MetricName>(['overlayPaths'])
 
 type Results = Readonly<Record<MetricName, number>>
 
@@ -38,6 +45,23 @@ const readJson = <T,>(path: string): T | null =>
 const writeJson = (path: string, value: unknown): void => {
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`)
+}
+
+const gauge = async (page: Page, name: string): Promise<number> =>
+  page.evaluate(
+    (n) => (globalThis as { __twinGauges?: Record<string, number> }).__twinGauges?.[n] ?? 0,
+    name,
+  )
+
+/** Waits for the worker to have cached all 24 baseline hours. */
+const wait24h = async (page: Page): Promise<void> => {
+  await page
+    .waitForFunction(
+      () => ((globalThis as { __twinGauges?: Record<string, number> }).__twinGauges?.baselineHours ?? 0) >= 24,
+      null,
+      { timeout: 120_000 },
+    )
+    .catch(() => undefined)
 }
 
 const markMs = async (page: Page, stage: string): Promise<Ms> =>
@@ -117,13 +141,29 @@ test('browser perf harness', async ({ page }) => {
     () => performance.getEntriesByName('first-contentful-paint')[0]?.startTime ?? Number.NaN,
   )
 
+  // the baseline hour is the first thing a scenario can be diffed against
+  await page
+    .waitForFunction(() => (globalThis as { __twinMarks?: Record<string, number> }).__twinMarks?.['first-baseline'] !== undefined, null, {
+      timeout: 120_000,
+    })
+    .catch(() => undefined)
+
+  const heapAfterLoad = await heapBytes(session)
+  await wait24h(page)
+
   const results: Results = {
     firstPaintMs: Number(firstPaintMs.toFixed(1)),
     firstTileMs: Number((await markMs(page, 'first-tile')).toFixed(1)),
     mapIdleMs: Number((await markMs(page, 'map-idle')).toFixed(1)),
     workerReadyMs: Number((await markMs(page, 'worker-ready')).toFixed(1)),
-    heapBytesAfterLoad: await heapBytes(session),
+    firstBaselineMs: Number((await markMs(page, 'first-baseline')).toFixed(1)),
+    heapBytesAfterLoad: heapAfterLoad,
+    heapBytesAfter24h: await heapBytes(session),
     transferBytes,
+    workerMessageBytes: await gauge(page, 'workerMessageBytes'),
+    overlayPaths: await gauge(page, 'overlayPaths'),
+    // fps below is measured with the result overlay on, which is the state the
+    // app actually runs in from here on
     fpsZ11: await bestFps(page, 11),
     fpsZ13: await bestFps(page, 13),
     fpsZ15: await bestFps(page, 15),
@@ -141,6 +181,7 @@ test('browser perf harness', async ({ page }) => {
   }
 
   const regressions = (Object.keys(results) as MetricName[])
+    .filter((k) => !INFORMATIONAL.has(k))
     .filter((k) => Number.isFinite(results[k]) && Number.isFinite(baseline[k]) && baseline[k] !== 0)
     .map((k) => ({ k, ratio: results[k] / baseline[k] }))
     .filter(({ k, ratio }) => (HIGHER_IS_BETTER.has(k) ? ratio < 1 - REGRESSION : ratio > 1 + REGRESSION))
