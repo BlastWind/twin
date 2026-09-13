@@ -69,6 +69,87 @@ magic_id!(
     "Linear id of a grid cell: `cy * cols + cx`. See [`crate::grid::ChunkGrid`]."
 );
 
+/// Hours in a day; the length of every hourly profile in the core.
+pub const HOURS_PER_DAY: usize = 24;
+
+/// Traffic-analysis zone. `u16` because the county has hundreds of block
+/// groups, not millions, and the OD triples are the biggest array in
+/// `demand.bin`.
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+#[repr(transparent)]
+pub struct ZoneId(u16);
+
+unsafe impl Zeroable for ZoneId {}
+unsafe impl Pod for ZoneId {}
+
+impl ZoneId {
+    /// Smart constructor: rejects the reserved sentinel value.
+    #[inline]
+    pub const fn new(raw: u16) -> Option<Self> {
+        match raw {
+            u16::MAX => None,
+            v => Some(Self(v)),
+        }
+    }
+
+    /// # Panics
+    /// Panics if `raw` is the reserved sentinel.
+    #[inline]
+    pub const fn from_index(raw: u16) -> Self {
+        assert!(raw != u16::MAX, "reserved sentinel id");
+        Self(raw)
+    }
+
+    #[inline]
+    pub const fn raw(self) -> u16 {
+        self.0
+    }
+
+    #[inline]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// An hour of the day, `0..24`. Correctness by construction: nothing
+/// downstream range-checks a profile lookup.
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+#[repr(transparent)]
+pub struct Hour(u8);
+
+impl Hour {
+    #[inline]
+    pub const fn new(raw: u8) -> Option<Self> {
+        match raw {
+            0..=23 => Some(Self(raw)),
+            _ => None,
+        }
+    }
+
+    /// # Panics
+    /// Panics outside `0..24`.
+    #[inline]
+    pub const fn from_index(raw: u8) -> Self {
+        assert!((raw as usize) < HOURS_PER_DAY, "hour out of range");
+        Self(raw)
+    }
+
+    /// Every hour of the day, ascending.
+    pub fn all() -> impl Iterator<Item = Hour> {
+        (0..HOURS_PER_DAY as u8).map(Hour)
+    }
+
+    #[inline]
+    pub const fn raw(self) -> u8 {
+        self.0
+    }
+
+    #[inline]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 /// OSM-derived road class. `u8` repr so it round-trips through the binary
 /// layouts as a plain byte array.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
