@@ -84,7 +84,7 @@ fn simplification_keeps_the_swallowed_shape() {
     assert_eq!(simplified.geom.len(), simplified.edges.len());
     let line = &simplified.geom[0];
     assert_eq!(line.len(), 5, "all five original nodes survive as points");
-    assert!(line[0][0] < line[4][0] || line[0][0] > line[4][0]);
+    assert_ne!(line[0], line[4], "the fused arc really spans the chain");
 }
 
 #[test]
