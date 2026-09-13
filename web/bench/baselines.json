@@ -1,11 +1,16 @@
 {
-  "firstPaintMs": 420,
-  "firstTileMs": 1765.6,
-  "mapIdleMs": 1791,
-  "workerReadyMs": 481,
-  "heapBytesAfterLoad": 5363888,
-  "transferBytes": 495553,
-  "fpsZ11": 6.5,
-  "fpsZ13": 6.2,
-  "fpsZ15": 6.7
+  "_note": "Re-recorded for Phase 2 (result overlay, 469-chunk county load, 24h stub solver). The Phase-1 numbers are not comparable: transferBytes and heap now include the graph, and fps is measured with the deck.gl overlay on. The three fps figures come from a swiftshader run taken while the Rust workspace was compiling on the same box, so they are a floor, not a target - re-record them on an idle machine before trusting a regression they report.",
+  "firstPaintMs": 176,
+  "firstTileMs": 815.9,
+  "mapIdleMs": 958.1,
+  "workerReadyMs": 213.3,
+  "firstBaselineMs": 6595.8,
+  "heapBytesAfterLoad": 14100188,
+  "heapBytesAfter24h": 13919824,
+  "transferBytes": 7962757,
+  "workerMessageBytes": 7308636,
+  "overlayPaths": 30648,
+  "fpsZ11": 0.6,
+  "fpsZ13": 0.2,
+  "fpsZ15": 0.2
 }
