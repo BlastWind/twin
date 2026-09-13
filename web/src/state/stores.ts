@@ -1,5 +1,13 @@
 import { create } from 'zustand'
-import { defaultVisibility, type LayerId, type LayerVisibility } from '../map/layers'
+import {
+  LAYER_REGISTRY,
+  defaultVisibility,
+  withAvailability,
+  type LayerEntry,
+  type LayerId,
+  type LayerVisibility,
+  type SourceLayerSet,
+} from '../map/layers'
 import type { ChunkGeometryDTO, ChunkKey, EdgeId, HourResultDTO, Hour, ResultKind, ScenarioDTO, StatsDTO, WorkerErrorDTO } from '../sim/protocol'
 import { EMPTY_SCENARIO } from '../sim/protocol'
 import type { ManifestDTO, StudyArea } from '../graph/manifest'
@@ -108,6 +116,12 @@ export const useSimStore = create<SimState>((set) => ({
 
 // ------------------------------------------------------------------------ ui
 
+/** Visibility the user actually chose: entries that differ from the default. */
+const pickToggled = (layers: LayerVisibility, registry: readonly LayerEntry[]): Partial<LayerVisibility> => {
+  const base = defaultVisibility(registry)
+  return Object.fromEntries(Object.entries(layers).filter(([id, on]) => on !== base[id as LayerId]))
+}
+
 /** What the overlay paints: one track, or the signed difference. */
 export type ViewMode = 'baseline' | 'scenario' | 'diff'
 
@@ -123,6 +137,8 @@ export type UiState = {
   readonly playing: boolean
   readonly mode: ViewMode
   readonly layers: LayerVisibility
+  /** the registry with `available` resolved against the tiles' `vector_layers` */
+  readonly registry: readonly LayerEntry[]
   readonly overlay: boolean
   readonly devOverlay: boolean
   readonly studyArea: StudyArea
@@ -133,6 +149,7 @@ export type UiState = {
   setPlaying: (playing: boolean) => void
   setMode: (mode: ViewMode) => void
   toggleLayer: (id: LayerId) => void
+  setSourceLayers: (present: SourceLayerSet) => void
   toggleOverlay: () => void
   toggleDevOverlay: () => void
   setStudyArea: (area: StudyArea) => void
@@ -146,6 +163,7 @@ export const useUiStore = create<UiState>((set) => ({
   playing: false,
   mode: 'baseline',
   layers: defaultVisibility(),
+  registry: LAYER_REGISTRY,
   overlay: true,
   devOverlay: true,
   studyArea: DEFAULT_STUDY_AREA,
@@ -156,6 +174,13 @@ export const useUiStore = create<UiState>((set) => ({
   setPlaying: (playing) => set({ playing }),
   setMode: (mode) => set({ mode }),
   toggleLayer: (id) => set((s) => ({ layers: { ...s.layers, [id]: !s.layers[id] } })),
+  // a layer that just became available takes its default visibility; one the
+  // user has already toggled keeps whatever they chose
+  setSourceLayers: (present) =>
+    set((s) => {
+      const registry = withAvailability(present)
+      return { registry, layers: { ...defaultVisibility(registry), ...pickToggled(s.layers, s.registry) } }
+    }),
   toggleOverlay: () => set((s) => ({ overlay: !s.overlay })),
   toggleDevOverlay: () => set((s) => ({ devOverlay: !s.devOverlay })),
   setStudyArea: (studyArea) => set({ studyArea }),

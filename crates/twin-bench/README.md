@@ -77,3 +77,18 @@ three ways to move the line, in order of expected payoff:
    sweep over the CCH would beat that, but the `cch` crate exposes no such
    primitive, and its one-to-many (939 µs to 1,415 pinned targets) returns
    distances without the tree the loading needs.
+
+## Phase 2.5 baseline (2026-09-13, re-measured)
+
+Re-run of `cargo run --release -p twin-bench --bin hour` on the same box before
+any Phase 2.5 work, so the gains below are measured against a fresh number
+rather than against the Phase 2 table (the box is slower under load today).
+
+| Configuration | hour 08 | iters |
+|---|---|---|
+| County, native, 16 threads | **13.26 s** | 6 |
+| County, native, 1 thread (`RAYON_NUM_THREADS=1`) | **83.8 s** | 6 |
+
+Per all-or-nothing pass (7 passes an hour): 1.9 s at 16 threads, 12 s serial —
+8.5 ms per origin for a one-to-all Dijkstra over 75,705 nodes / 165,545 edges.
+Parallel efficiency is only 6.3x on 16 cores.

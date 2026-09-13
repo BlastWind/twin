@@ -1,27 +1,77 @@
-import { LAYER_REGISTRY } from '../map/layers'
+import { LAYER_GROUPS, ZONE_CATEGORIES, ZONE_COLORS, type LayerEntry, type LayerGroup } from '../map/layers'
 import { useUiStore } from '../state/stores'
 
-export const LayerPanel = () => {
-  const layers = useUiStore((s) => s.layers)
+/**
+ * Layer panel, grouped as in DESIGN 7.4. Only layers the tiles actually carry
+ * are listed — `available` is resolved from the PMTiles metadata at load, so a
+ * layer the pipeline has not emitted yet is absent rather than a dead toggle.
+ */
+
+const Row = ({ entry }: { entry: LayerEntry }) => {
+  const on = useUiStore((s) => s.layers[entry.id])
   const toggleLayer = useUiStore((s) => s.toggleLayer)
+  return (
+    <label style={row}>
+      <input type="checkbox" checked={on} onChange={() => toggleLayer(entry.id)} />
+      <span>{entry.label}</span>
+      <span style={dim}>z{entry.minzoom}+</span>
+    </label>
+  )
+}
+
+/** Identity is never colour alone: the swatch sits beside its category name. */
+const ZoningLegend = () => (
+  <div style={legend}>
+    {ZONE_CATEGORIES.map((c) => (
+      <span key={c} style={legendItem}>
+        <span style={{ ...swatch, background: ZONE_COLORS[c] }} />
+        {c.replace('_', ' ')}
+      </span>
+    ))}
+  </div>
+)
+
+export const LayerPanel = () => {
+  const registry = useUiStore((s) => s.registry)
+  const zoningOn = useUiStore((s) => s.layers.zoning)
+  const overlay = useUiStore((s) => s.overlay)
+  const toggleOverlay = useUiStore((s) => s.toggleOverlay)
+  const tool = useUiStore((s) => s.tool)
+  const setTool = useUiStore((s) => s.setTool)
+
+  const groups = LAYER_GROUPS.map(
+    (g): readonly [LayerGroup, readonly LayerEntry[]] => [g, registry.filter((e) => e.available && e.group === g)],
+  ).filter(([, entries]) => entries.length > 0)
+
   return (
     <section className="panel">
       <h2>Layers</h2>
-      {LAYER_REGISTRY.map((entry) => (
-        <label key={entry.id} style={{ ...row, opacity: entry.available ? 1 : 0.45 }}>
-          <input
-            type="checkbox"
-            checked={layers[entry.id]}
-            disabled={!entry.available}
-            onChange={() => toggleLayer(entry.id)}
-          />
-          <span>{entry.label}</span>
-          <span style={dim}>z{entry.minzoom}+</span>
-        </label>
+      {groups.map(([group, entries]) => (
+        <div key={group} className="layer-group">
+          <h3>{group}</h3>
+          {entries.map((entry) => (
+            <Row key={entry.id} entry={entry} />
+          ))}
+          {group === 'Land use' && zoningOn && <ZoningLegend />}
+        </div>
       ))}
+      <div className="layer-group">
+        <h3>Sim</h3>
+        <label style={row}>
+          <input type="checkbox" checked={overlay} onChange={toggleOverlay} />
+          <span>Assignment overlay</span>
+        </label>
+        <label style={row}>
+          <input type="checkbox" checked={tool === 'reach'} onChange={() => setTool(tool === 'reach' ? 'select' : 'reach')} />
+          <span>Isochrone (reach)</span>
+        </label>
+      </div>
     </section>
   )
 }
 
 const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, padding: '2px 0' }
 const dim: React.CSSProperties = { marginLeft: 'auto', color: '#6c7686', fontSize: 11 }
+const legend: React.CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: '2px 10px', padding: '4px 0 2px 22px' }
+const legendItem: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#9aa4b2' }
+const swatch: React.CSSProperties = { width: 9, height: 9, borderRadius: 2, display: 'inline-block' }
