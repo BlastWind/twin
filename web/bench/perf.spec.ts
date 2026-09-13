@@ -34,8 +34,21 @@ type MetricName =
 /** Higher-is-better metrics regress when they *fall*; the rest when they rise. */
 const HIGHER_IS_BETTER: ReadonlySet<MetricName> = new Set<MetricName>(['fpsZ11', 'fpsZ13', 'fpsZ15'])
 
-/** Counts, not costs: they document the run rather than gate it. */
-const INFORMATIONAL: ReadonlySet<MetricName> = new Set<MetricName>(['overlayPaths'])
+/**
+ * Recorded and printed, but not gated.
+ *
+ * `overlayPaths` is a count, not a cost. The fps figures are excluded for a
+ * different reason: under swiftshader they land between 0.5 and 2, where a
+ * single frame moves the number by more than the regression threshold, so
+ * gating on them reports noise. Fold them back in once they are measured on a
+ * machine with a real GPU and sit somewhere stable.
+ */
+const INFORMATIONAL: ReadonlySet<MetricName> = new Set<MetricName>([
+  'overlayPaths',
+  'fpsZ11',
+  'fpsZ13',
+  'fpsZ15',
+])
 
 type Results = Readonly<Record<MetricName, number>>
 
