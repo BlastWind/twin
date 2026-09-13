@@ -67,3 +67,30 @@ attribution.
 
 Still open: a cold county run is 3.4 s, of which ~0.6 s is the hierarchy build,
 which nothing yet caches across sessions.
+
+## Phase 2.5 / 3 outcome — web (2026-09-13)
+
+Integration pass against the merged tree: both wasm builds rebuilt from it, the
+real 98 MiB `world.pmtiles`, `transit.bin`, `counts.bin`, `feeds.bin`.
+
+- All ten tile layers are probed from the archive's `vector_layers` and all nine
+  registry layers report available; at z15 every one of them renders features
+  (`crash_grid` is empty there by design — it hands over to the points at z12).
+- `crossOriginIsolated` is true under the vite headers, `/wasm-mt/` loads and
+  `threadCount()` reports 16. Isochrone, reach summary and calibration all run
+  against the real backend; nothing in the app is on a stub any more.
+- County (coarse), driven from the preset button: 165,545 edges, first hour
+  7.7 s including the chunk load and the hierarchy build, warm hours 4.5 s.
+  That is above the 1.7 s native figure — the browser is running under
+  swiftshader on a shared machine — so the study-area estimate is anchored on
+  the native numbers and the measured browser figure is recorded here.
+- Two integration breakages, both fixed on the web side. `wasm-bindgen-rayon`'s
+  worker helper imports `'../../..'` and expects a bundler to resolve it; served
+  as plain files that 404s and the pool silently never starts, so
+  `web/scripts/patch-wasm-mt.mjs` rewrites the specifier and the loader now
+  falls back to the single-threaded build when the pool does not come up.
+  `calibration()` returns all 6,889 stations including those on roads the study
+  area does not model; 1,719 have a modelled volume and only those are scored.
+- Open: the model reads well below the counts on a block study area (station
+  240 AADT against 24 modelled) — expected when through traffic is truncated,
+  but it means calibration is only meaningful county-wide.
