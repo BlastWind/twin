@@ -70,61 +70,77 @@ const markMs = async (page: Page, stage: string): Promise<Ms> =>
     stage,
   )
 
-/** Drive a scripted path and count frames actually presented. */
+/**
+ * Drive a scripted path and count frames actually presented.
+ *
+ * The frame counter is installed, waited on, and read back in three *short*
+ * evaluates. A single long-lived `page.evaluate` spanning the animation is the
+ * obvious way to write this and the wrong one: when the page cannot keep up,
+ * that call never settles, and Playwright will not tear the test down while a
+ * protocol call is outstanding - so one slow zoom hangs the entire run and no
+ * metric gets written. Nothing here outlives a wait Playwright itself controls.
+ */
+type FpsProbe = { readonly frames: number; readonly ms: number }
+
+const LEGS = [
+  { dLng: 0.03, dLat: 0.02, bearing: 25, duration: 900 },
+  { dLng: -0.03, dLat: -0.02, pitch: 60, duration: 900 },
+  { dLng: 0, dLat: 0, pitch: 45, bearing: 0, duration: 900 },
+] as const
+
+const LEG_GAP_MS = 60
+const PATH_MS = LEGS.reduce((n, l) => n + l.duration + LEG_GAP_MS, 0)
+
 const measureFps = async (page: Page, zoom: number): Promise<number> => {
   await page.evaluate((z) => {
     const map = (globalThis as { __twinMap?: { jumpTo: (o: unknown) => void } }).__twinMap
-    map?.jumpTo({ center: [-77.28, 38.85], zoom: z, pitch: 45, bearing: 0 })
+    map?.jumpTo({ center: [-77.3, 38.85], zoom: z, pitch: 45, bearing: 0 })
   }, zoom)
   await page.waitForTimeout(500)
 
-  const frames = await page.evaluate(async () => {
-    const map = (globalThis as { __twinMap?: { easeTo: (o: unknown) => void; getCenter: () => { lng: number; lat: number } } }).__twinMap
-    if (!map) return { frames: 0, ms: 1 }
-    let count = 0
-    let stop = false
+  // install the counter and start the animation; returns at once
+  await page.evaluate((legs) => {
+    const g = globalThis as {
+      __twinMap?: { easeTo: (o: unknown) => void; getCenter: () => { lng: number; lat: number } }
+      __twinFpsProbe?: { frames: number; t0: number; stop: boolean }
+    }
+    const map = g.__twinMap
+    if (!map) return
+    const probe = { frames: 0, t0: performance.now(), stop: false }
+    g.__twinFpsProbe = probe
     const tick = () => {
-      count += 1
-      if (!stop) requestAnimationFrame(tick)
+      probe.frames += 1
+      if (!probe.stop) requestAnimationFrame(tick)
     }
     requestAnimationFrame(tick)
-    const t0 = performance.now()
     const c = map.getCenter()
-    const legs = [
-      { center: [c.lng + 0.03, c.lat + 0.02], bearing: 25, duration: 900 },
-      { center: [c.lng - 0.03, c.lat - 0.02], pitch: 60, duration: 900 },
-      { center: [c.lng, c.lat], pitch: 45, bearing: 0, duration: 900 },
-    ]
-    for (const leg of legs) {
-      map.easeTo({ ...leg, essential: true })
-      await new Promise((r) => setTimeout(r, leg.duration + 60))
-    }
-    stop = true
-    return { frames: count, ms: performance.now() - t0 }
+    legs.forEach((leg, i) => {
+      setTimeout(
+        () => map.easeTo({ ...leg, center: [c.lng + leg.dLng, c.lat + leg.dLat], essential: true }),
+        legs.slice(0, i).reduce((n, l) => n + l.duration + 60, 0),
+      )
+    })
+  }, LEGS as unknown as { dLng: number; dLat: number; duration: number }[])
+
+  await page.waitForTimeout(PATH_MS)
+
+  const probe = await page.evaluate((): FpsProbe => {
+    const g = globalThis as { __twinFpsProbe?: { frames: number; t0: number; stop: boolean } }
+    const p = g.__twinFpsProbe
+    if (!p) return { frames: 0, ms: 1 }
+    p.stop = true
+    return { frames: p.frames, ms: Math.max(1, performance.now() - p.t0) }
   })
-  return Number(((frames.frames * 1000) / frames.ms).toFixed(1))
+  return Number(((probe.frames * 1000) / probe.ms).toFixed(1))
 }
 
 /**
  * Software GL in CI is noisy; take the best of a few passes (the first pass
  * also warms the tile cache and shaders) so the 15% threshold is meaningful.
- *
- * A pass that overruns is abandoned rather than allowed to eat the whole test
- * budget: on a loaded box a single scripted leg can take minutes, and losing
- * one fps number is much cheaper than losing every metric in the run.
  */
-const FPS_PASS_BUDGET_MS = 30_000
-
 const bestFps = async (page: Page, zoom: number, passes = 3): Promise<number> => {
   const runs: number[] = []
-  for (let i = 0; i < passes; i += 1) {
-    const run = await Promise.race([
-      measureFps(page, zoom),
-      new Promise<null>((r) => setTimeout(() => r(null), FPS_PASS_BUDGET_MS)),
-    ])
-    if (run === null) break
-    runs.push(run)
-  }
+  for (let i = 0; i < passes; i += 1) runs.push(await measureFps(page, zoom))
   return runs.length > 0 ? Math.max(...runs) : Number.NaN
 }
 
@@ -184,14 +200,24 @@ test('browser perf harness', async ({ page }) => {
   // or the page dies under them, the run still leaves something behind.
   writeJson(RESULTS, loadMetrics)
 
-  const results: Results = {
-    ...loadMetrics,
-    // fps is measured with the result overlay on, which is the state the app
-    // actually runs in from here on
-    fpsZ11: await bestFps(page, 11),
-    fpsZ13: await bestFps(page, 13),
-    fpsZ15: await bestFps(page, 15),
+  /**
+   * fps is measured with the result overlay on, which is the state the app
+   * actually runs in from here on. Each zoom is banked as soon as it lands:
+   * under software GL a high zoom can saturate the page's main thread badly
+   * enough to starve the CDP channel, and when that happens the zooms that did
+   * complete are still worth having.
+   */
+  const fps: Partial<Record<MetricName, number>> = {}
+  for (const [metric, zoom] of [
+    ['fpsZ11', 11],
+    ['fpsZ13', 13],
+    ['fpsZ15', 15],
+  ] as const) {
+    fps[metric] = await bestFps(page, zoom)
+    writeJson(RESULTS, { ...loadMetrics, ...fps })
   }
+
+  const results: Results = { ...loadMetrics, ...fps }
 
   writeJson(RESULTS, results)
   // eslint-disable-next-line no-console
