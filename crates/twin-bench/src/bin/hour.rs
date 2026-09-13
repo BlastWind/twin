@@ -8,7 +8,7 @@
 //! in `benches/` is the regression gate.
 
 use std::time::Instant;
-use twin_core::assign::{assign, AssignPlan, Loader};
+use twin_core::assign::{assign, AssignPlan, Loader, Zoning};
 use twin_core::demand::DemandSchema;
 use twin_core::graph_schema::GraphChunkSchema;
 use twin_core::schema::AlignedBytes;
@@ -77,6 +77,12 @@ fn main() {
     // `hour dijkstra` forces the old per-origin Dijkstra loading; the default is
     // the CCH sweep, restricted from the pipeline's county-wide order.
     let want_cch = std::env::args().nth(2).as_deref() != Some("dijkstra");
+    // `hour <radius> <loader> coarse` merges the block groups down to ~400
+    // loading points, which is what a county-wide run in the browser uses.
+    let zones = match std::env::args().nth(3).as_deref() {
+        Some("coarse") => Zoning::coarse(),
+        _ => Zoning::Full,
+    };
     let t = Instant::now();
     let mut plan = match want_cch {
         false => AssignPlan::default(),
@@ -86,9 +92,10 @@ fn main() {
             let order = CchOrderSchema::decode(&order_bytes).expect("order decodes");
             AssignPlan::new(Loader::cch(&view, &restrict_order(&view, order.rank)))
         }
-    };
+    }
+    .with_zones(zones);
     println!(
-        "loader {} | build {:.0} ms",
+        "loader {} | zones {zones:?} | build {:.0} ms",
         match want_cch {
             true => "cch",
             false => "dijkstra",

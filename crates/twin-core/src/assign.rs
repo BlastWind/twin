@@ -6,7 +6,7 @@
 
 use crate::demand::{return_share, DemandSchema};
 use crate::ids::{EdgeId, Hour};
-use crate::routing::{seconds_to_weight, OneToAll, Skim};
+use crate::routing::{seconds_to_weight, InArcs, OneToAll, Skim};
 use crate::scenario::{EdgeAttrs, ScenarioView};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
@@ -72,12 +72,29 @@ pub struct HourResult {
     pub rel_gap: f32,
 }
 
+/// `x^beta`, cheaply for the beta everyone actually uses.
+///
+/// The line search evaluates BPR over every edge some thirty times an
+/// iteration; at beta = 4 that is tens of millions of `powf` calls, each two
+/// orders of magnitude dearer than the three multiplies it stands in for.
+#[inline]
+fn pow_beta(x: f32, beta: f32) -> f32 {
+    match beta {
+        4.0 => {
+            let s = x * x;
+            s * s
+        }
+        3.0 => x * x * x,
+        b => x.powf(b),
+    }
+}
+
 /// BPR travel time in seconds.
 #[inline]
 fn bpr(a: &EdgeAttrs, flow: f32, p: &AssignParams) -> f32 {
     match a.open {
         false => CLOSED_S,
-        true => a.free_flow_s * (1.0 + p.alpha * (flow / a.capacity_vph).powf(p.beta)),
+        true => a.free_flow_s * (1.0 + p.alpha * pow_beta(flow / a.capacity_vph, p.beta)),
     }
 }
 
@@ -87,10 +104,119 @@ fn bpr_deriv(a: &EdgeAttrs, flow: f32, p: &AssignParams) -> f32 {
     match a.open {
         false => 0.0,
         true => {
-            a.free_flow_s * p.alpha * p.beta * (flow / a.capacity_vph).powf(p.beta - 1.0)
+            a.free_flow_s * p.alpha * p.beta * pow_beta(flow / a.capacity_vph, p.beta - 1.0)
                 / a.capacity_vph
         }
     }
+}
+
+/// How many distinct points the hour loads from.
+///
+/// Every all-or-nothing pass costs one one-to-all sweep per loading point, so
+/// the zone count is the solver's single biggest lever. The county's 1,415
+/// LODES block groups are far finer than a network this size can resolve; for a
+/// county-wide run they merge.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Zoning {
+    /// Every zone in `demand.bin` loads at its own centroid.
+    Full,
+    /// Zones merge into at most `target` clusters, each loading at the centroid
+    /// of its heaviest member.
+    Coarse { target: usize },
+}
+
+impl Zoning {
+    /// What a county-wide run uses. Chosen so the loading points stay a few
+    /// hundred metres apart on average across Fairfax, which is finer than the
+    /// simplified graph's own resolution.
+    pub const COUNTY_TARGET: usize = 400;
+
+    pub fn coarse() -> Self {
+        Self::Coarse {
+            target: Self::COUNTY_TARGET,
+        }
+    }
+}
+
+/// Merge zones into `target` clusters: weighted Lloyd's algorithm on the
+/// centroids, seeded with the `target` heaviest zones.
+///
+/// Seeding by weight rather than at random makes the result deterministic — a
+/// run must be reproducible — and puts the seeds where the trips are, which is
+/// where a cluster boundary costs the most.
+///
+/// Returns, for each zone, the zone whose centroid it now loads at.
+fn merge_zones(demand: &DemandSchema<'_>, target: usize) -> Vec<u16> {
+    let n = demand.zone_count();
+    let identity = || (0..n as u16).collect::<Vec<u16>>();
+    if n <= target || target == 0 {
+        return identity();
+    }
+
+    let mut weight = vec![0.0f32; n];
+    for t in demand.od {
+        weight[t.origin as usize] += t.trips;
+        weight[t.dest as usize] += t.trips;
+    }
+    // Degrees are not a metric; flatten longitude by the latitude of the area
+    // so "nearest" means nearest on the ground.
+    let mean_lat = demand.zone_lonlat.iter().map(|p| p[1] as f64).sum::<f64>() / n.max(1) as f64;
+    let kx = (mean_lat.to_radians().cos()) as f32;
+    let at = |z: usize| -> [f32; 2] {
+        let p = demand.zone_lonlat[z];
+        [p[0] * kx, p[1]]
+    };
+
+    let mut by_weight: Vec<usize> = (0..n).collect();
+    by_weight.sort_unstable_by(|&a, &b| weight[b].total_cmp(&weight[a]).then(a.cmp(&b)));
+    let mut seeds: Vec<[f32; 2]> = by_weight[..target].iter().map(|&z| at(z)).collect();
+
+    let mut of_zone = vec![0u16; n];
+    for _ in 0..12 {
+        let mut moved = false;
+        for z in 0..n {
+            let p = at(z);
+            let best = seeds
+                .iter()
+                .enumerate()
+                .min_by(|(_, a), (_, b)| {
+                    let d = |q: &[f32; 2]| (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2);
+                    d(a).total_cmp(&d(b))
+                })
+                .map_or(0, |(i, _)| i as u16);
+            moved |= std::mem::replace(&mut of_zone[z], best) != best;
+        }
+        if !moved {
+            break;
+        }
+        let mut sum = vec![[0.0f64; 2]; target];
+        let mut mass = vec![0.0f64; target];
+        for z in 0..n {
+            let c = of_zone[z] as usize;
+            let w = weight[z].max(f32::EPSILON) as f64;
+            let p = at(z);
+            sum[c][0] += p[0] as f64 * w;
+            sum[c][1] += p[1] as f64 * w;
+            mass[c] += w;
+        }
+        for c in 0..target {
+            if mass[c] > 0.0 {
+                seeds[c] = [(sum[c][0] / mass[c]) as f32, (sum[c][1] / mass[c]) as f32];
+            }
+        }
+    }
+
+    // The cluster loads at a real zone centroid, not at the mean of a few: the
+    // mean is not snapped to a node, and the heaviest member already sits where
+    // most of the cluster's trips start.
+    let mut rep = vec![u16::MAX; target];
+    for &z in &by_weight {
+        let c = of_zone[z] as usize;
+        if rep[c] == u16::MAX {
+            rep[c] = z as u16;
+        }
+    }
+    (0..n).map(|z| rep[of_zone[z] as usize]).collect()
 }
 
 /// One origin's demand: the dense node it loads at, and where its trips go.
@@ -109,10 +235,18 @@ fn origins_for(
     view: &ScenarioView<'_>,
     demand: &DemandSchema<'_>,
     hour: Hour,
+    zones: Zoning,
 ) -> Vec<OriginDemand> {
-    let dense_of_zone: Vec<Option<u32>> = (0..demand.zone_count())
-        .map(|z| crate::ids::NodeId::new(demand.zone_node[z]).and_then(|n| view.index_of_node(n)))
-        .collect();
+    let dense_of_zone: Vec<Option<u32>> = match zones {
+        Zoning::Full => (0..demand.zone_count()).collect::<Vec<usize>>(),
+        Zoning::Coarse { target } => merge_zones(demand, target)
+            .into_iter()
+            .map(usize::from)
+            .collect(),
+    }
+    .into_iter()
+    .map(|z| crate::ids::NodeId::new(demand.zone_node[z]).and_then(|n| view.index_of_node(n)))
+    .collect();
     let back = return_share(hour);
     let mut by_origin: std::collections::HashMap<u32, Vec<(u32, f32)>> =
         std::collections::HashMap::new();
@@ -149,6 +283,10 @@ struct Topology {
     out_edges: Vec<u32>,
     head: Vec<u32>,
     tail: Vec<u32>,
+    /// The same arcs indexed by head, which is the direction tree recovery
+    /// reads them in. Built once per run, not once per origin.
+    in_offsets: Vec<u32>,
+    in_edges: Vec<u32>,
 }
 
 impl Topology {
@@ -161,13 +299,39 @@ impl Topology {
             out_edges.extend_from_slice(view.out_edges_of(v));
             offsets.push(out_edges.len() as u32);
         }
-        let head = (0..view.edge_count()).map(|e| view.head_of(e)).collect();
-        let tail = (0..view.edge_count()).map(|e| view.tail_of(e)).collect();
+        let head: Vec<u32> = (0..view.edge_count()).map(|e| view.head_of(e)).collect();
+        let tail: Vec<u32> = (0..view.edge_count()).map(|e| view.tail_of(e)).collect();
+
+        let mut in_offsets = vec![0u32; n + 2];
+        for &h in &head {
+            in_offsets[h as usize + 2] += 1;
+        }
+        for v in 2..in_offsets.len() {
+            in_offsets[v] += in_offsets[v - 1];
+        }
+        let mut in_edges = vec![0u32; head.len()];
+        for (e, &h) in head.iter().enumerate() {
+            let slot = &mut in_offsets[h as usize + 1];
+            in_edges[*slot as usize] = e as u32;
+            *slot += 1;
+        }
+        in_offsets.truncate(n + 1);
+
         Self {
             offsets,
             out_edges,
             head,
             tail,
+            in_offsets,
+            in_edges,
+        }
+    }
+
+    fn in_arcs(&self) -> InArcs<'_> {
+        InArcs {
+            offsets: &self.in_offsets,
+            edges: &self.in_edges,
+            tail: &self.tail,
         }
     }
 
@@ -369,13 +533,14 @@ fn all_or_nothing(
             skim.customize_seconds(cost);
             let weight: Vec<u32> = cost.iter().copied().map(seconds_to_weight).collect();
             let skim: &Skim = skim;
+            let arcs = topo.in_arcs();
             fold_origins(
                 origins,
                 cost.len(),
                 || OneToAll::new(nodes),
                 |sweep, o, acc| {
                     sweep.run(skim, o.node);
-                    sweep.load_tree(o.node, &topo.tail, &topo.head, &weight, &o.dests, acc);
+                    sweep.load_tree(o.node, &arcs, &weight, &o.dests, acc);
                 },
             )
         }
@@ -489,9 +654,10 @@ pub fn all_or_nothing_pass(
     demand: &DemandSchema<'_>,
     hour: Hour,
     cost_s: &[f32],
-    loader: &mut Loader,
+    plan: &mut AssignPlan,
 ) -> Vec<f32> {
-    let origins = origins_for(view, demand, hour);
+    let origins = origins_for(view, demand, hour, plan.zones);
+    let loader = &mut plan.loader;
     all_or_nothing(&Topology::of(view), cost_s, &origins, loader)
 }
 
@@ -515,6 +681,7 @@ pub fn free_flow_costs(view: &ScenarioView<'_>) -> Vec<f32> {
 pub struct AssignPlan {
     pub params: AssignParams,
     pub loader: Loader,
+    pub zones: Zoning,
 }
 
 impl Default for AssignPlan {
@@ -522,6 +689,7 @@ impl Default for AssignPlan {
         Self {
             params: AssignParams::default(),
             loader: Loader::Dijkstra,
+            zones: Zoning::Full,
         }
     }
 }
@@ -537,6 +705,10 @@ impl AssignPlan {
     pub fn with_params(self, params: AssignParams) -> Self {
         Self { params, ..self }
     }
+
+    pub fn with_zones(self, zones: Zoning) -> Self {
+        Self { zones, ..self }
+    }
 }
 
 /// Static user-equilibrium assignment for one hour.
@@ -551,16 +723,17 @@ pub fn assign(
     warm: Option<&[f32]>,
     plan: &mut AssignPlan,
 ) -> HourResult {
-    let params = &plan.params;
     // A hierarchy built over a different study area would silently answer with
     // the wrong graph; fall back rather than mislead.
     if !plan.loader.fits(view) {
         plan.loader = Loader::Dijkstra;
     }
+    let params = &plan.params.clone();
     let e = view.edge_count();
     let attrs = view.attrs_all();
     let topo = Topology::of(view);
-    let origins = origins_for(view, demand, hour);
+    let origins = origins_for(view, demand, hour, plan.zones);
+    let loader = &mut plan.loader;
 
     let priced =
         |flows: &[f32]| -> Vec<f32> { (0..e).map(|i| bpr(&attrs[i], flows[i], params)).collect() };
@@ -570,9 +743,6 @@ pub fn assign(
         Some(w) if w.len() == e => w,
         _ => &zero,
     };
-    let params = plan.params;
-    let params = &params;
-    let loader = &mut plan.loader;
     let mut x = all_or_nothing(&topo, &priced(seed), &origins, loader);
     // Most recent descent targets, newest first; two are enough for BFW.
     let mut prev: Vec<Vec<f32>> = Vec::new();

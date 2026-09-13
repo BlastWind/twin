@@ -154,12 +154,13 @@ pub struct OneToAll {
     by_rank: Vec<u32>,
     /// The same distances permuted back to dense node indices.
     dist: Vec<u32>,
-    /// `pred[v]`: the dense edge index v is reached by, or [`NO_EDGE`].
+    /// `pred[v]`: the dense edge index v is reached by, or [`NO_EDGE`]. Valid
+    /// only where `stamp[v]` is the current generation.
     pred: Vec<u32>,
-    /// How many tree children a node still owes before its load is final.
-    pending: Vec<u32>,
-    load: Vec<f32>,
-    stack: Vec<u32>,
+    /// Which origin's walk last wrote `pred[v]`. A counter beats clearing a
+    /// node-sized array once per origin.
+    stamp: Vec<u32>,
+    generation: u32,
 }
 
 /// `pred` sentinel: no predecessor (the source, or an unreachable node).
@@ -171,9 +172,8 @@ impl OneToAll {
             by_rank: vec![INF_WEIGHT; node_count],
             dist: vec![INF_WEIGHT; node_count],
             pred: vec![NO_EDGE; node_count],
-            pending: vec![0; node_count],
-            load: vec![0.0; node_count],
-            stack: Vec::with_capacity(node_count),
+            stamp: vec![0; node_count],
+            generation: 0,
         }
     }
 
@@ -228,67 +228,73 @@ impl OneToAll {
     /// Push `dests`' trips back up the shortest-path tree implied by the last
     /// [`Self::run`], adding each arc's carried volume into `out`.
     ///
-    /// `tail`/`head`/`weight` are the original arcs in dense edge order;
-    /// `weight` must be the same `u32` costs the metric was customized with.
-    /// Peeling leaves first means every node is visited once, so the cost does
-    /// not depend on how many destinations there are.
+    /// The tree is never materialised. Each destination walks back to the
+    /// source one arc at a time, and a node's predecessor is found on demand by
+    /// scanning its incoming arcs for the one that closes `dist[u] + w ==
+    /// dist[v]`. Predecessors are cached under a generation stamp, so the
+    /// shared upstream trunk — which is most of the walking — is resolved once
+    /// per origin however many destinations cross it.
+    ///
+    /// The alternative, deriving the whole tree with one pass over every arc
+    /// and peeling it leaves-first, is independent of the destination count but
+    /// costs `O(nodes + arcs)` whatever the demand looks like; measured on the
+    /// county it was 2.6 ms against this walk's 0.3 ms.
     pub fn load_tree(
         &mut self,
         source: u32,
-        tail: &[u32],
-        head: &[u32],
+        arcs: &InArcs<'_>,
         weight: &[u32],
         dests: &[(u32, f32)],
         out: &mut [f32],
     ) {
-        let n = self.dist.len();
-        self.pred[..n].fill(NO_EDGE);
-        self.pending[..n].fill(0);
-        self.load[..n].fill(0.0);
-
-        for e in 0..weight.len() {
-            let u = tail[e] as usize;
-            let v = head[e] as usize;
-            let du = self.dist[u];
-            let on_tree = du != INF_WEIGHT
-                && v != source as usize
-                && self.pred[v] == NO_EDGE
-                && du.saturating_add(weight[e]) == self.dist[v];
-            if on_tree {
-                self.pred[v] = e as u32;
-                self.pending[u] += 1;
-            }
-        }
-
-        for &(d, trips) in dests {
-            if self.dist[d as usize] != INF_WEIGHT {
-                self.load[d as usize] += trips;
-            }
-        }
-
-        // Leaves first: a node's load is final once every child has drained.
-        // Weights are >= 1, so distances strictly increase along the tree and
-        // it cannot contain a cycle that would stall the peel.
-        self.stack.clear();
-        self.stack
-            .extend((0..n as u32).filter(|&v| self.pending[v as usize] == 0));
-        while let Some(v) = self.stack.pop() {
-            let e = self.pred[v as usize];
-            if e == NO_EDGE {
+        self.generation += 1;
+        for &(dest, trips) in dests {
+            if self.dist[dest as usize] == INF_WEIGHT {
                 continue;
             }
-            let u = tail[e as usize] as usize;
-            let carried = self.load[v as usize];
-            if carried > 0.0 {
-                out[e as usize] += carried;
-                self.load[u] += carried;
-            }
-            self.pending[u] -= 1;
-            if self.pending[u] == 0 {
-                self.stack.push(u as u32);
+            let mut v = dest;
+            while v != source {
+                let e = self.predecessor(v, arcs, weight);
+                if e == NO_EDGE {
+                    break;
+                }
+                out[e as usize] += trips;
+                v = arcs.tail[e as usize];
             }
         }
     }
+
+    /// The arc `v` is reached by on a shortest path from the current source.
+    /// Weights are >= 1, so `dist` strictly decreases along the chain and the
+    /// walk in [`Self::load_tree`] always terminates.
+    #[inline]
+    fn predecessor(&mut self, v: u32, arcs: &InArcs<'_>, weight: &[u32]) -> u32 {
+        if self.stamp[v as usize] == self.generation {
+            return self.pred[v as usize];
+        }
+        let dv = self.dist[v as usize];
+        let from = arcs.offsets[v as usize] as usize;
+        let to = arcs.offsets[v as usize + 1] as usize;
+        let found = arcs.edges[from..to]
+            .iter()
+            .copied()
+            .find(|&e| {
+                let du = self.dist[arcs.tail[e as usize] as usize];
+                du != INF_WEIGHT && du.saturating_add(weight[e as usize]) == dv
+            })
+            .unwrap_or(NO_EDGE);
+        self.stamp[v as usize] = self.generation;
+        self.pred[v as usize] = found;
+        found
+    }
+}
+
+/// The original arcs indexed by head: what tree recovery walks backwards.
+/// `edges[offsets[v]..offsets[v + 1]]` are the arcs entering `v`.
+pub struct InArcs<'a> {
+    pub offsets: &'a [u32],
+    pub edges: &'a [u32],
+    pub tail: &'a [u32],
 }
 
 #[inline]
