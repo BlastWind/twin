@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// County planimetric heights and elevations are in survey feet.
 const FEET_TO_M: f64 = 0.3048;
@@ -59,19 +59,19 @@ pub fn build_gis(raw_dir: &Path, out_dir: &Path) -> Result<GisOutput> {
 
     let layers = vec![
         normalise(
-            &src.join("buildings"),
+            &[src.join("buildings")],
             &dst.join("buildings.geojsonl"),
             "buildings",
             building_props,
         )?,
         normalise(
-            &src.join("parcel_geom"),
+            &shards(&src, "parcel_geom"),
             &dst.join("parcels.geojsonl"),
             "parcels",
             |f| parcel_props(f, &attrs, &values),
         )?,
         normalise(
-            &src.join("zoning"),
+            &[src.join("zoning")],
             &dst.join("zoning.geojsonl"),
             "zoning",
             zoning_props,
@@ -88,10 +88,28 @@ pub fn build_gis(raw_dir: &Path, out_dir: &Path) -> Result<GisOutput> {
     Ok(GisOutput { layers, notes })
 }
 
+/// Every page directory belonging to one layer: `name`, plus `name_0`,
+/// `name_1`, ... when it was sharded across parallel downloads.
+fn shards(src: &Path, name: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(src) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n == name || n.starts_with(&format!("{name}_")))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 /// Stream one raw layer through a property mapper into newline-delimited
 /// GeoJSON. `None` from the mapper drops the feature.
 fn normalise(
-    src: &Path,
+    src: &[PathBuf],
     dst: &Path,
     name: &'static str,
     mut props: impl FnMut(&FeatureDTO) -> Option<Map<String, Value>>,
@@ -102,7 +120,7 @@ fn normalise(
         name,
         ..Default::default()
     };
-    arcgis::for_each_feature(src, |f| {
+    arcgis::for_each_feature_in(src, |f| {
         let (Some(p), Some(geometry)) = (props(&f), f.geometry.as_ref()) else {
             return Ok(());
         };

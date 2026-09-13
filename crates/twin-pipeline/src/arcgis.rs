@@ -92,9 +92,18 @@ pub fn pages(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Stream every feature of a layer through `f`. Returns how many there were.
-pub fn for_each_feature(dir: &Path, mut f: impl FnMut(FeatureDTO) -> Result<()>) -> Result<usize> {
+pub fn for_each_feature(dir: &Path, f: impl FnMut(FeatureDTO) -> Result<()>) -> Result<usize> {
+    for_each_feature_in(&[dir.to_path_buf()], f)
+}
+
+/// The same, over several page directories — a layer sharded across parallel
+/// downloads is several directories of one layer.
+pub fn for_each_feature_in(
+    dirs: &[PathBuf],
+    mut f: impl FnMut(FeatureDTO) -> Result<()>,
+) -> Result<usize> {
     let mut n = 0;
-    for path in pages(dir) {
+    for path in dirs.iter().flat_map(|d| pages(d)) {
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
         let page: PageDTO =

@@ -171,7 +171,16 @@ print(-1 if 'error' in d else len(d.get('features', [])))" "$1" 2>/dev/null || e
 if [[ "${TWIN_SKIP_GIS:-0}" != "1" ]]; then
   echo "arcgis  Fairfax County GIS + VDOT -> $GIS_DIR"
   arcgis_layer buildings     "$BUILDINGS_URL"     "1=1" || true
-  arcgis_layer parcel_geom   "$PARCEL_GEOM_URL"   "1=1" || true
+  # 370 000 polygons is the slowest layer by far, so it is sharded on
+  # OBJECTID and the shards are paged in parallel; ingest-gis reads
+  # parcel_geom_* as one layer.
+  for shard in 0 1 2 3; do
+    lo=$(( shard * 100000 ))
+    hi=$(( lo + 100000 ))
+    arcgis_layer "parcel_geom_$shard" "$PARCEL_GEOM_URL" \
+      "OBJECTID >= $lo AND OBJECTID < $hi" &
+  done
+  wait
   arcgis_layer parcels       "$PARCELS_URL"       "1=1" no || true
   arcgis_layer parcel_values "$PARCEL_VALUES_URL" "1=1" no || true
   arcgis_layer zoning        "$ZONING_URL"        "1=1" || true
