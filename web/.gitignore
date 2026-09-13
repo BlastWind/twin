@@ -3,6 +3,7 @@ dist/
 .vite/
 public/data/world.pmtiles
 public/wasm/
+public/wasm-mt/
 bench/results.json
 test-results/
 playwright-report/
@@ -11,3 +12,9 @@ public/data/graph
 public/data/manifest.json
 public/data/demand.bin
 public/data/cch_order.bin
+public/data/transit.bin
+public/data/counts.bin
+public/data/feeds.bin
+
+bench/integration.json
+bench/county.json
