@@ -133,6 +133,42 @@ fn origins_for(
     origins
 }
 
+/// The flat arrays the inner loop touches, pulled out of the 40-byte
+/// `GraphEdge` rows once per run. Walking a `Vec<u32>` instead of striding
+/// through structs is most of the Dijkstra's speed.
+struct Topology {
+    offsets: Vec<u32>,
+    out_edges: Vec<u32>,
+    head: Vec<u32>,
+    tail: Vec<u32>,
+}
+
+impl Topology {
+    fn of(view: &ScenarioView<'_>) -> Self {
+        let n = view.node_count();
+        let mut offsets = Vec::with_capacity(n + 1);
+        let mut out_edges = Vec::with_capacity(view.edge_count());
+        offsets.push(0u32);
+        for v in 0..n {
+            out_edges.extend_from_slice(view.out_edges_of(v));
+            offsets.push(out_edges.len() as u32);
+        }
+        let head = (0..view.edge_count()).map(|e| view.head_of(e)).collect();
+        let tail = (0..view.edge_count()).map(|e| view.tail_of(e)).collect();
+        Self {
+            offsets,
+            out_edges,
+            head,
+            tail,
+        }
+    }
+
+    #[inline]
+    fn out_of(&self, v: usize) -> &[u32] {
+        &self.out_edges[self.offsets[v] as usize..self.offsets[v + 1] as usize]
+    }
+}
+
 /// Min-heap entry. `f32` has no `Ord`, so the comparison is spelled out with
 /// `total_cmp` rather than smuggled in through a wrapper crate.
 #[derive(Copy, Clone, PartialEq)]
@@ -186,7 +222,7 @@ impl Tree {
     /// once, so the cost is independent of how many destinations there are.
     fn load_origin(
         &mut self,
-        view: &ScenarioView<'_>,
+        topo: &Topology,
         cost: &[f32],
         origin: &OriginDemand,
         out: &mut [f32],
@@ -209,8 +245,8 @@ impl Tree {
                 continue;
             }
             self.settled.push(node);
-            for &e in view.out_edges_of(node as usize) {
-                let head = view.head_of(e as usize) as usize;
+            for &e in topo.out_of(node as usize) {
+                let head = topo.head[e as usize] as usize;
                 let nd = d + cost[e as usize];
                 if nd < self.dist[head] {
                     self.dist[head] = nd;
@@ -239,22 +275,23 @@ impl Tree {
                 continue;
             }
             out[e as usize] += carried;
-            self.load[view.tail_of(e as usize) as usize] += carried;
+            self.load[topo.tail[e as usize] as usize] += carried;
         }
     }
 }
 
 /// All-or-nothing: every trip on its cheapest path under `cost`.
-fn all_or_nothing(view: &ScenarioView<'_>, cost: &[f32], origins: &[OriginDemand]) -> Vec<f32> {
+fn all_or_nothing(topo: &Topology, cost: &[f32], origins: &[OriginDemand]) -> Vec<f32> {
+    let nodes = topo.offsets.len() - 1;
     #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
         origins
             .par_iter()
             .fold(
-                || (Tree::new(view.node_count()), vec![0.0f32; cost.len()]),
+                || (Tree::new(nodes), vec![0.0f32; cost.len()]),
                 |(mut tree, mut acc), o| {
-                    tree.load_origin(view, cost, o, &mut acc);
+                    tree.load_origin(topo, cost, o, &mut acc);
                     (tree, acc)
                 },
             )
@@ -269,10 +306,10 @@ fn all_or_nothing(view: &ScenarioView<'_>, cost: &[f32], origins: &[OriginDemand
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let mut tree = Tree::new(view.node_count());
+        let mut tree = Tree::new(nodes);
         let mut acc = vec![0.0f32; cost.len()];
         for o in origins {
-            tree.load_origin(view, cost, o, &mut acc);
+            tree.load_origin(topo, cost, o, &mut acc);
         }
         acc
     }
@@ -387,7 +424,7 @@ pub fn all_or_nothing_pass(
     cost_s: &[f32],
 ) -> Vec<f32> {
     let origins = origins_for(view, demand, hour);
-    all_or_nothing(view, cost_s, &origins)
+    all_or_nothing(&Topology::of(view), cost_s, &origins)
 }
 
 /// Free-flow travel times, the natural starting costs.
@@ -417,6 +454,7 @@ pub fn assign(
 ) -> HourResult {
     let e = view.edge_count();
     let attrs = view.attrs_all();
+    let topo = Topology::of(view);
     let origins = origins_for(view, demand, hour);
 
     let priced =
@@ -427,7 +465,7 @@ pub fn assign(
         Some(w) if w.len() == e => w,
         _ => &zero,
     };
-    let mut x = all_or_nothing(view, &priced(seed), &origins);
+    let mut x = all_or_nothing(&topo, &priced(seed), &origins);
     // Most recent descent targets, newest first; two are enough for BFW.
     let mut prev: Vec<Vec<f32>> = Vec::new();
     let mut rel_gap = f32::INFINITY;
@@ -436,7 +474,7 @@ pub fn assign(
     for _ in 0..params.max_iters {
         iterations += 1;
         let cost = priced(&x);
-        let aon = all_or_nothing(view, &cost, &origins);
+        let aon = all_or_nothing(&topo, &cost, &origins);
 
         let total: f64 = cost
             .iter()

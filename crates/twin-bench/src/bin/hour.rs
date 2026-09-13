@@ -31,9 +31,7 @@ fn main() {
         .iter()
         .filter(|e| match radius {
             None => true,
-            Some(r) => {
-                e.cx.abs_diff(centre.cx) <= r && e.cy.abs_diff(centre.cy) <= r
-            }
+            Some(r) => e.cx.abs_diff(centre.cx) <= r && e.cy.abs_diff(centre.cy) <= r,
         })
         .collect();
 
@@ -77,7 +75,11 @@ fn main() {
     );
 
     let mut warm: Option<Vec<f32>> = None;
-    for hour in [Hour::from_index(8), Hour::from_index(9), Hour::from_index(17)] {
+    for hour in [
+        Hour::from_index(8),
+        Hour::from_index(9),
+        Hour::from_index(17),
+    ] {
         let t = Instant::now();
         let r = assign(
             &view,

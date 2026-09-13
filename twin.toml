@@ -12,3 +12,15 @@ cell_m = 2000.0
 simplify = true
 # Service roads roughly double the edge count for little assignment value.
 keep_service = false
+
+[demand]
+# LEHD LODES 8, fetched by scripts/download-data.sh into paths.raw_dir. If any
+# of the three is missing the stage synthesizes a gravity model and says so.
+od_main = "va_od_main_JT00_2023.csv.gz"
+od_aux = "va_od_aux_JT00_2023.csv.gz"
+xwalk = "va_xwalk.csv.gz"
+# External zones ringing the bbox, absorbing through traffic.
+external_zones = 12
+# Vehicle trips per LODES job: ~88 % auto mode share over ~1.1 occupants.
+auto_factor = 0.8
+synthetic = false

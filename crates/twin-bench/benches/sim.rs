@@ -233,15 +233,7 @@ fn bench_hour(c: &mut Criterion) {
         let demand = DemandSchema::decode(&f.demand_bytes).expect("demand decodes");
         let view = ScenarioView::apply(f.graph.view(), &Scenario::empty());
         group.bench_function(BenchmarkId::from_parameter(&label), |b| {
-            b.iter(|| {
-                black_box(assign(
-                    &view,
-                    &demand,
-                    hour,
-                    None,
-                    &AssignParams::default(),
-                ))
-            })
+            b.iter(|| black_box(assign(&view, &demand, hour, None, &AssignParams::default())))
         });
     }
     group.finish();
