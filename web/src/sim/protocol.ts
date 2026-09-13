@@ -64,9 +64,19 @@ export type EditDTO = EdgeEditDTO | TransitEditDTO
 
 export const isEdgeEdit = (e: EditDTO): e is EdgeEditDTO => e.type !== 'TransitEdit'
 
-export type ScenarioDTO = { readonly edits: readonly EditDTO[] }
+/**
+ * How finely the demand loads. County-scale runs want `coarse` — a few hundred
+ * loading points instead of 1,415 — and it is what keeps an hour inside a few
+ * seconds. Optional and defaulted on the Rust side, so an older saved scenario
+ * still parses.
+ */
+export type ZonesDTO = 'full' | 'coarse'
+
+export type ScenarioDTO = { readonly edits: readonly EditDTO[]; readonly zones?: ZonesDTO }
 
 export const EMPTY_SCENARIO: ScenarioDTO = { edits: [] }
+
+export const withZones = (s: ScenarioDTO, zones: ZonesDTO): ScenarioDTO => ({ ...s, zones })
 
 export const editedEdges = (s: ScenarioDTO): ReadonlySet<EdgeId> =>
   new Set(s.edits.filter(isEdgeEdit).map((e) => e.edge))
@@ -127,6 +137,8 @@ export type StatsDTO = {
   readonly chunksLoaded: number
   readonly wasmBytes: number
   readonly backend: WasmBackendKind
+  /** What `threadCount()` reports: 1 unless the threaded build's pool started. */
+  readonly threads: number
 }
 
 export type WorkerErrorCode = 'load-failed' | 'schema-mismatch' | 'run-failed' | 'unsupported'

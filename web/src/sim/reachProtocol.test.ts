@@ -15,11 +15,14 @@ import {
   type ReachResultDTO,
   type RouteId,
   type ScenarioDTO,
+  withZones,
 } from './protocol'
+import { scenarioJson } from './wasmApi'
+import { HEAVY_HOUR_SECONDS, hourCost, threadSpeedup } from '../graph/manifest'
 import { createNodeIndex } from './nodeIndex'
 import { bandsOf, convexHull } from '../overlay/reach'
-import { axisMax, calibrationStats } from '../state/calibration'
-import { encodeScenario, decodeScenario, withEdit, withoutRoute } from '../scenario/codec'
+import { axisMax, calibrationStats, scorableRows } from '../state/calibration'
+import { encodeScenario, decodeScenario, scenarioToHash, withEdit, withoutRoute } from '../scenario/codec'
 
 const request: IsochroneRequestDTO = { lon: -77.3, lat: 38.85, hour: hour(8), budgetMin: 45 }
 
@@ -163,5 +166,62 @@ describe('calibration stats', () => {
     expect(calibrationStats([]).n).toBe(0)
     expect(axisMax(0)).toBe(1)
     expect(axisMax(42_000)).toBeGreaterThanOrEqual(42_000)
+  })
+})
+
+describe('zoning in the scenario', () => {
+  it('reaches the wasm boundary only when it is set', () => {
+    expect(JSON.parse(scenarioJson({ edits: [] }))).toEqual({ edits: [] })
+    expect(JSON.parse(scenarioJson(withZones({ edits: [] }, 'coarse')))).toEqual({ edits: [], zones: 'coarse' })
+  })
+
+  it('leaves the default out of the URL hash, so old links still match', () => {
+    expect(scenarioToHash(withZones({ edits: [] }, 'full'))).toBe('')
+    expect(scenarioToHash(withZones({ edits: [] }, 'coarse'))).not.toBe('')
+  })
+
+  it('round-trips coarse and defaults anything else to full', () => {
+    const coarse = withZones({ edits: [{ type: 'CloseEdge', edge: edgeId(4) }] }, 'coarse')
+    expect(decodeScenario(encodeScenario(coarse))?.zones).toBe('coarse')
+    // absent *is* full: the default is never written, so it never comes back
+    const plain = decodeScenario(encodeScenario({ edits: [{ type: 'CloseEdge', edge: edgeId(4) }] }))
+    expect(plain?.zones).toBeUndefined()
+  })
+})
+
+describe('hour cost', () => {
+  const COUNTY_EDGES = 165_545
+
+  it('reproduces the measured county figures', () => {
+    // 83 s full/single-threaded, 12 s coarse/single-threaded, 1.7 s coarse on 8
+    expect(hourCost({ edges: COUNTY_EDGES, zones: 'full', threads: 1 }).warmS).toBeCloseTo(83, -1)
+    expect(hourCost({ edges: COUNTY_EDGES, zones: 'coarse', threads: 1 }).warmS).toBeCloseTo(12, 0)
+    expect(hourCost({ edges: COUNTY_EDGES, zones: 'coarse', threads: 8 }).warmS).toBeCloseTo(1.7, 1)
+  })
+
+  it('prices the cold hour above the warm one and scales with threads', () => {
+    const one = hourCost({ edges: COUNTY_EDGES, zones: 'coarse', threads: 1 })
+    const eight = hourCost({ edges: COUNTY_EDGES, zones: 'coarse', threads: 8 })
+    expect(one.coldS).toBeGreaterThan(one.warmS)
+    expect(eight.warmS).toBeLessThan(one.warmS)
+    expect(threadSpeedup(1)).toBe(1)
+  })
+
+  it('clears the warning threshold for the county only when coarse and threaded', () => {
+    expect(hourCost({ edges: COUNTY_EDGES, zones: 'coarse', threads: 8 }).warmS).toBeLessThan(HEAVY_HOUR_SECONDS)
+    expect(hourCost({ edges: COUNTY_EDGES, zones: 'coarse', threads: 1 }).warmS).toBeGreaterThan(HEAVY_HOUR_SECONDS)
+    expect(hourCost({ edges: COUNTY_EDGES, zones: 'full', threads: 8 }).warmS).toBeGreaterThan(HEAVY_HOUR_SECONDS)
+  })
+})
+
+describe('scorable calibration rows', () => {
+  it('drops stations the study area never modelled', () => {
+    const rows = [
+      { stationId: 1, edge: edgeId(1), aadt: 100, modeledDaily: 0 },
+      { stationId: 2, edge: edgeId(2), aadt: 100, modeledDaily: 90 },
+    ]
+    expect(scorableRows(rows)).toHaveLength(1)
+    // and the score is about the one it could model, not dragged down by the zero
+    expect(calibrationStats(scorableRows(rows)).rmse).toBe(10)
   })
 })

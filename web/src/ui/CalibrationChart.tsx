@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { flyToEdge } from '../map/edgeCenter'
-import { axisMax, calibrationStats } from '../state/calibration'
+import { axisMax, calibrationStats, scorableRows } from '../state/calibration'
 import { useCalibrationStore, useUiStore, useWorldStore } from '../state/stores'
 import type { CalibrationDTO, EdgeId } from '../sim/protocol'
 
@@ -30,13 +30,20 @@ const short = (n: number): string =>
   n >= 1000 ? `${(n / 1000).toLocaleString(undefined, { maximumFractionDigits: n >= 10_000 ? 0 : 1 })}k` : `${Math.round(n)}`
 
 export const CalibrationChart = () => {
-  const rows = useCalibrationStore((s) => s.rows)
+  const all = useCalibrationStore((s) => s.rows)
+  const rows = useMemo(() => scorableRows(all), [all])
   const select = useUiStore((s) => s.select)
   const geometry = useWorldStore((s) => s.geometry)
   const stats = useMemo(() => calibrationStats(rows), [rows])
 
   if (rows.length === 0) {
-    return <p className="hint">No count stations loaded — counts.bin has not been produced yet.</p>
+    return (
+      <p className="hint">
+        {all.length === 0
+          ? 'No count stations yet — counts.bin loads after the graph, and the table fills in after a 24 h sweep.'
+          : `None of the ${all.length.toLocaleString()} stations sit on a road this study area models.`}
+      </p>
+    )
   }
 
   const max = axisMax(Math.max(stats.maxObserved, stats.maxModeled))
@@ -115,7 +122,10 @@ export const CalibrationChart = () => {
           modeled daily
         </text>
       </svg>
-      <p className="chart-note">Dashed line is 1:1. Click a station to select its edge.</p>
+      <p className="chart-note">
+        Dashed line is 1:1. Click a station to select its edge. {rows.length.toLocaleString()} of{' '}
+        {all.length.toLocaleString()} stations sit on modelled roads; the rest are outside the study area.
+      </p>
     </>
   )
 }

@@ -210,17 +210,62 @@ export const edgesInArea = (
 }
 
 /**
- * Seconds for one assignment hour, fitted to the two `twin-bench` figures for
- * the wasm solver: ~1.0 s at 36k edges and ~83 s at 165k. That is an exponent
- * near 2.9, so the cost is close to cubic in the edge count — which is why the
- * app opens on a block rather than the county.
+ * Seconds for one assignment hour, fitted to the wasm solver's measured
+ * figures: ~1.0 s at 36k edges and ~83 s at the county's 165k, full zones,
+ * single-threaded. That is an exponent near 2.9 — close to cubic in the edge
+ * count, which is why the app opens on a block rather than the county.
  */
 const REF_EDGES = 36_000
 const REF_SECONDS = 1.0
 const COST_EXPONENT = 2.9
 
+/**
+ * Zone aggregation and threads are the two Phase-2.5 multipliers, both
+ * anchored on the county-coarse measurements: 12 s single-threaded, 1.7 s warm
+ * on 8 threads, and roughly double that on the first (cold) hour.
+ *
+ *   coarse zones     12 / 82.7   = 0.145 of the full-zone cost
+ *   8 threads        12 / 1.7    = 7.06x, i.e. ~0.88 efficiency per thread
+ */
+const COARSE_ZONE_FACTOR = 0.145
+const THREAD_EFFICIENCY = 0.883
+const COLD_MULTIPLIER = 2
+
+export type Zoning = 'full' | 'coarse'
+
+export type HourCostDTO = {
+  /** A later hour, warm-started from the previous one. */
+  readonly warmS: number
+  /** The first hour after the edge set changes, which rebuilds the solver. */
+  readonly coldS: number
+}
+
+export type HourCostInput = {
+  readonly edges: number
+  readonly zones: Zoning
+  /** What `threadCount()` reported; 1 in the single-threaded build. */
+  readonly threads: number
+}
+
+/** Rayon does not scale perfectly, and past the core count it does not scale. */
+export const threadSpeedup = (threads: number): number =>
+  threads <= 1 ? 1 : 1 + (threads - 1) * THREAD_EFFICIENCY
+
 export const estimatedHourSeconds = (edges: number): number =>
   edges <= 0 ? 0 : REF_SECONDS * (edges / REF_EDGES) ** COST_EXPONENT
 
-/** Past this the UI warns before committing to a run. */
+export const hourCost = ({ edges, zones, threads }: HourCostInput): HourCostDTO => {
+  const warmS =
+    (estimatedHourSeconds(edges) * (zones === 'coarse' ? COARSE_ZONE_FACTOR : 1)) / threadSpeedup(threads)
+  return { warmS, coldS: warmS * COLD_MULTIPLIER }
+}
+
+/**
+ * Past this much time per hour the UI warns. It is a time, not an edge count:
+ * the county is fine on eight threads with coarse zones and painful without,
+ * and the same edge count means both things.
+ */
+export const HEAVY_HOUR_SECONDS = 5
+
+/** Kept for the edge-count reading of the same threshold (full zones, 1 thread). */
 export const HEAVY_AREA_EDGES = 60_000

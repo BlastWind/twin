@@ -23,6 +23,18 @@ export type CalibrationStatsDTO = {
 
 export const EMPTY_STATS: CalibrationStatsDTO = { n: 0, r2: Number.NaN, rmse: 0, bias: 0, maxObserved: 0, maxModeled: 0 }
 
+/**
+ * Stations the current study area can actually be scored against.
+ *
+ * `calibration()` returns every station in `counts.bin` — 6,889 county-wide —
+ * but a station on a road outside the resident chunks has no modelled volume
+ * at all, and scoring the model against a zero it was never asked to produce
+ * would drag R² down for a reason that has nothing to do with the model. Those
+ * rows are dropped and counted, not silently averaged in.
+ */
+export const scorableRows = (rows: readonly CalibrationDTO[]): readonly CalibrationDTO[] =>
+  rows.filter((r) => r.modeledDaily > 0)
+
 export const calibrationStats = (rows: readonly CalibrationDTO[]): CalibrationStatsDTO => {
   if (rows.length === 0) return EMPTY_STATS
   const mean = rows.reduce((n, r) => n + r.aadt, 0) / rows.length

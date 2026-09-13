@@ -84,7 +84,9 @@ export const Dashboard = () => {
   return (
     <div className="panel dashboard">
       <h2>
-        Dashboard <span className="sub">{stats ? `${stats.backend} · ${stats.edges.toLocaleString()} edges` : 'loading…'}</span>
+        Dashboard <span className="sub">{stats
+          ? `${stats.backend}${stats.threads > 1 ? ` ×${stats.threads}` : ''} · ${stats.edges.toLocaleString()} edges`
+          : 'loading…'}</span>
       </h2>
       <div className="row tabs">
         {TABS.map((t) => (

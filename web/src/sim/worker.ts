@@ -143,6 +143,8 @@ const runHours = (solver: SolverApi, req: RunRequestDTO): void => {
     }
     const h = queue.shift() as Hour
     const raw = solver.runHour(json, h)
+    // the volume block is the first third; the calibration table sums the 24
+    solver.recordHour?.(h, raw.subarray(0, raw.length / 3))
     const cell: HourCell = { raw: raw.slice(), kpis: parseKpis(solver.kpisJson()) }
     cache.set(h, cell)
     post({ type: 'hour-result', seq: 0, payload: hourResult(req.id, req.kind, h, cell, h === req.hours[0]) })

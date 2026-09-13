@@ -1,6 +1,7 @@
 import { gauge, mark } from '../perf'
 import {
   useCalibrationStore,
+  useScenarioStore,
   useReachStore,
   useSimStore,
   useTransitStore,
@@ -22,6 +23,7 @@ import {
   type IsochroneRequestDTO,
   type RunId,
   type ScenarioDTO,
+  withZones,
 } from './protocol'
 import {
   chunkIx,
@@ -242,7 +244,9 @@ export const createSimClient = (): SimClient => {
         message: 'demand.bin is missing, so no hour can be assigned',
       })
     }
-    run('baseline', { edits: [] })
+    // the baseline is the comparison target, so it runs under the same zoning
+    // the scenario does; only the edits are dropped
+    run('baseline', withZones({ edits: [] }, useScenarioStore.getState().scenario.zones ?? 'full'))
   }
 
   const start = async (): Promise<void> => {

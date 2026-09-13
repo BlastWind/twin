@@ -303,4 +303,10 @@ export const useTransitStore = create<TransitState>((set) => ({
  * React: turn every layer on, drop a reach origin. Nothing in the app reads
  * these.
  */
-Object.assign(globalThis, { __twinUi: useUiStore, __twinReach: useReachStore })
+Object.assign(globalThis, {
+  __twinUi: useUiStore,
+  __twinReach: useReachStore,
+  __twinWorld: useWorldStore,
+  __twinCalibration: useCalibrationStore,
+  __twinScenario: useScenarioStore,
+})

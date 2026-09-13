@@ -9,7 +9,10 @@
     "preview": "vite preview",
     "test": "vitest run",
     "bench": "playwright test -c bench/playwright.config.ts",
-    "fixture": "node scripts/make-fixture-pmtiles.mjs"
+    "fixture": "node scripts/make-fixture-pmtiles.mjs",
+    "patch-wasm": "node scripts/patch-wasm-mt.mjs",
+    "predev": "node scripts/patch-wasm-mt.mjs",
+    "prebuild": "node scripts/patch-wasm-mt.mjs"
   },
   "dependencies": {
     "@deck.gl/core": "^9",

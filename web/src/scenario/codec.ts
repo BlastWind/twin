@@ -7,7 +7,7 @@
  */
 
 import { decode as cborDecode, encode as cborEncode } from 'cbor-x'
-import type { EdgeId, EditDTO, RouteId, ScenarioDTO } from '../sim/protocol'
+import type { EdgeId, EditDTO, RouteId, ScenarioDTO, ZonesDTO } from '../sim/protocol'
 import { EMPTY_SCENARIO, isEdgeEdit } from '../sim/protocol'
 import type { ManifestHash } from '../graph/manifest'
 
@@ -60,6 +60,9 @@ const canonicalEdit = (e: EditDTO): EditDTO => {
 
 const canonical = (s: ScenarioDTO): ScenarioDTO => ({
   edits: [...s.edits].sort((a, b) => editTarget(a).localeCompare(editTarget(b))).map(canonicalEdit),
+  // `full` is the default, so it is left out: a scenario that never touched
+  // the zoning toggle must encode to the same string it always did
+  ...(s.zones === undefined || s.zones === 'full' ? {} : { zones: s.zones }),
 })
 
 export const encodeScenario = (s: ScenarioDTO): ScenarioCode => toBase64Url(cborEncode(canonical(s)))
@@ -72,9 +75,12 @@ const isEdit = (v: unknown): boolean => {
 
 export const decodeScenario = (code: string): ScenarioDTO | null => {
   try {
-    const value = cborDecode(fromBase64Url(code)) as { edits?: unknown }
+    const value = cborDecode(fromBase64Url(code)) as { edits?: unknown; zones?: unknown }
     if (!Array.isArray(value?.edits) || !value.edits.every(isEdit)) return null
-    return canonical({ edits: value.edits as ScenarioDTO['edits'] })
+    // an unrecognised zoning falls back to the default rather than rejecting
+    // the whole scenario: the edits are the part worth recovering
+    const zones: ZonesDTO = value.zones === 'coarse' ? 'coarse' : 'full'
+    return canonical({ edits: value.edits as ScenarioDTO['edits'], zones })
   } catch {
     return null
   }
@@ -82,7 +88,8 @@ export const decodeScenario = (code: string): ScenarioDTO | null => {
 
 // ------------------------------------------------------------------- hash
 
-export const scenarioToHash = (s: ScenarioDTO): string => (s.edits.length === 0 ? '' : `${HASH_PREFIX}${encodeScenario(s)}`)
+export const scenarioToHash = (s: ScenarioDTO): string =>
+  s.edits.length === 0 && (s.zones ?? 'full') === 'full' ? '' : `${HASH_PREFIX}${encodeScenario(s)}`
 
 export const scenarioFromHash = (hash: string): ScenarioDTO =>
   hash.startsWith(HASH_PREFIX) ? (decodeScenario(hash.slice(HASH_PREFIX.length)) ?? EMPTY_SCENARIO) : EMPTY_SCENARIO

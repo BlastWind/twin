@@ -59,12 +59,15 @@ export type SolverApi = {
   readonly runHour: (scenarioJson: string, hour: number) => Float32Array
   readonly loadedEdgeIds: () => Uint32Array
   readonly kpisJson: () => string
-  readonly stats: () => { nodes: number; edges: number; chunksLoaded: number; wasmBytes: number }
+  readonly stats: () => { nodes: number; edges: number; chunksLoaded: number; wasmBytes: number; threads: number }
+  /** Hands one hour's volumes to the calibration table; absent before Phase 3. */
+  readonly recordHour: ((hour: number, volumes: Float32Array) => void) | null
   /** null until `twin-wasm/src/transit.rs` exports it. */
   readonly transit: TransitApi | null
 }
 
-export const scenarioJson = (s: ScenarioDTO): string => JSON.stringify({ edits: s.edits })
+export const scenarioJson = (s: ScenarioDTO): string =>
+  JSON.stringify(s.zones === undefined ? { edits: s.edits } : { edits: s.edits, zones: s.zones })
 
 // ------------------------------------------------------------------ real wasm
 
@@ -130,9 +133,14 @@ const wasmTransit = (mod: WasmModule, world: WasmWorld, kind: WasmBackendKind): 
   }
 }
 
-/** Resolves to the real solver, or `null` when the module is absent or is still Phase-1. */
-export const loadWasmSolver = async (): Promise<SolverApi | null> => {
-  const dir = await pickWasmDir()
+/**
+ * Load one build. Returns `null` when the module is absent, is still Phase-1,
+ * or — for the threaded build — when its worker pool refuses to start, which
+ * is a real possibility: the rayon workers fetch the module again themselves,
+ * and anything they cannot fetch leaves a module that looks fine and computes
+ * nothing.
+ */
+const loadFrom = async (dir: WasmDir): Promise<SolverApi | null> => {
   const mod = await import(/* @vite-ignore */ abs(`${dir}twin_wasm.js`))
     .then((m) => m as WasmModule)
     .catch(() => null)
@@ -143,9 +151,19 @@ export const loadWasmSolver = async (): Promise<SolverApi | null> => {
     .catch(() => null)
   if (!memory) return null
   const world = new mod.TwinWorld()
-  // wasm-bindgen-rayon needs an explicit pool start; absent in the single-threaded build.
-  const initThreads = bind<(n: number) => Promise<void>>(mod, world, 'initThreadPool')
-  if (dir === '/wasm-mt/' && initThreads) await initThreads(navigator.hardwareConcurrency ?? 4).catch(() => undefined)
+  const threadCount = bind<() => number>(mod, world, 'threadCount')
+  if (dir === '/wasm-mt/') {
+    const initThreads = bind<(n: number) => Promise<void>>(mod, world, 'initThreadPool')
+    if (!initThreads) return null
+    const started = await initThreads(navigator.hardwareConcurrency ?? 4).then(
+      () => true,
+      () => false,
+    )
+    // a pool that did not start is worse than the single-threaded build: same
+    // work, plus the atomics ABI. Fall back rather than limp.
+    if (!started || (threadCount?.() ?? 1) <= 1) return null
+  }
+  const recordHour = bind<(h: number, v: Float32Array) => void>(mod, world, 'recordHour')
   const fns = Object.fromEntries(REQUIRED.map((n) => [n, bind(mod, world, n)]))
   if (REQUIRED.some((n) => !fns[n])) return null // Phase-1 module: no solver yet
   const kind: WasmBackendKind = dir === '/wasm-mt/' ? 'wasm-mt' : 'wasm'
@@ -160,6 +178,7 @@ export const loadWasmSolver = async (): Promise<SolverApi | null> => {
     runHour: fns.runHour as SolverApi['runHour'],
     loadedEdgeIds: fns.loadedEdgeIds as SolverApi['loadedEdgeIds'],
     kpisJson: fns.kpisJson as SolverApi['kpisJson'],
+    recordHour: recordHour ?? null,
     stats: () => {
       const s = world.stats()
       return {
@@ -167,9 +186,17 @@ export const loadWasmSolver = async (): Promise<SolverApi | null> => {
         edges: s.edges,
         chunksLoaded: s.chunks_loaded ?? s.chunksLoaded ?? 0,
         wasmBytes: s.wasm_bytes ?? memory.buffer.byteLength,
+        threads: threadCount?.() ?? 1,
       }
     },
   }
+}
+
+/** Resolves to the real solver, or `null` when no build is usable. */
+export const loadWasmSolver = async (): Promise<SolverApi | null> => {
+  const dir = await pickWasmDir()
+  const first = await loadFrom(dir)
+  return first ?? (dir === '/wasm-mt/' ? loadFrom('/wasm/') : null)
 }
 
 // ---------------------------------------------------------------------- stub
@@ -258,7 +285,8 @@ export const createStubSolver = (): SolverApi => {
     loadCchOrder: () => undefined,
     loadedEdgeIds: () => order,
     kpisJson: () => JSON.stringify(kpis),
-    stats: () => ({ nodes, edges: edges.length, chunksLoaded: chunks.size, wasmBytes: demandBytes }),
+    recordHour: null,
+    stats: () => ({ nodes, edges: edges.length, chunksLoaded: chunks.size, wasmBytes: demandBytes, threads: 1 }),
     runHour: (json, hour) => {
       const { closed, capScale } = closedOf(json)
       const n = edges.length
