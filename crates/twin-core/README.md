@@ -14,6 +14,11 @@ globals, so the same object code runs natively in `twin-pipeline` and in
 | `grid` | `BBox`, `GridSchema` — a fixed ~2 km cell grid over the study bbox. |
 | `assembly` | `RawGraph`, `simplify_degree2`, `partition`, `RawGraph::synthetic_grid`. |
 | `graph` | `RoadGraph`: assemble any subset of chunks, dedup border edges, detect boundary edges, rebuild CSR. |
+| `demand` | `DemandSchema` (`demand.bin`): zone centroids snapped to nodes, sparse OD triples, the NHTS-style 24-hour profile and the outbound/return split. |
+| `cch_order` | `CchOrderSchema` (`cch_order.bin`): the metric-independent contraction order, in global node ids. |
+| `scenario` | `Scenario` (an ADT of edits) and `ScenarioView`, a sparse overlay over a `GraphView`. |
+| `assign` | Biconjugate Frank-Wolfe user equilibrium over BPR, `HourResult`, KPIs. |
+| `routing` | `Skim`: CCH build/customize/one-to-many over the loaded study area, plus `nested_dissection_order`. |
 
 ## Alignment note
 
@@ -52,5 +57,15 @@ off for wasm.
 
 `cch::graph::Graph` is CSR with `u32` weights (`first_out`, `head`, `weight`),
 which matches `GraphChunkSchema`'s `out_offsets` / `out_edges` layout, so
-feeding it from a `RoadGraph` needs no structural conversion. The solver is
-**not** integrated yet; that is Phase 2.
+feeding it from a `RoadGraph` needs no structural conversion. ### Where the CCH is and is not used (Phase 2)
+
+`routing::Skim` wraps `cch` for zone-to-zone skims and point-to-point queries.
+The equilibrium loop does **not** use it. All-or-nothing loading needs a whole
+shortest-path *tree* per origin — every node's predecessor arc, so flow can be
+pushed back up it — and a CCH one-to-many returns distances to pinned targets,
+not a tree. Growing a Dijkstra tree per origin costs about the same as the
+one-to-many would (~1.1 ms over 75k nodes / 165k edges) and yields the loading
+for free, whereas a CCH route would additionally pay ~270 ms per
+re-customization at E = 200k. So `assign` grows its own trees and forks over
+origins with rayon natively; on wasm32, which has no threads here, the same code
+runs serially.

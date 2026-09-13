@@ -15,7 +15,9 @@ pub mod scenario;
 pub mod schema;
 
 pub use assembly::{partition, simplify_degree2, Partition, Polyline, RawEdge, RawGraph, RawNode};
-pub use assign::{assign, AssignParams, HourResult, Kpis};
+pub use assign::{
+    all_or_nothing_pass, assign, free_flow_costs, AssignParams, HourResult, Kpis,
+};
 pub use cch_order::{CchOrderSchema, OrderKind};
 pub use demand::{DemandMetaSchema, DemandSchema, OdTripleSchema, NHTS_HOUR_PROFILE};
 pub use graph::{GraphEdge, GraphError, GraphNode, GraphView, RoadGraph};

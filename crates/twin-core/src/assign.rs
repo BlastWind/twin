@@ -377,6 +377,32 @@ fn descent_target(aon: &[f32], x: &[f32], prev: &[Vec<f32>], hess: &[f32]) -> Ve
     aon.to_vec()
 }
 
+/// One all-or-nothing loading at the given per-edge costs: every trip of the
+/// hour on its cheapest path, nothing spread. This is the inner half of an
+/// equilibrium iteration, and the thing worth benchmarking on its own.
+pub fn all_or_nothing_pass(
+    view: &ScenarioView<'_>,
+    demand: &DemandSchema<'_>,
+    hour: Hour,
+    cost_s: &[f32],
+) -> Vec<f32> {
+    let origins = origins_for(view, demand, hour);
+    all_or_nothing(view, cost_s, &origins)
+}
+
+/// Free-flow travel times, the natural starting costs.
+pub fn free_flow_costs(view: &ScenarioView<'_>) -> Vec<f32> {
+    (0..view.edge_count())
+        .map(|e| {
+            let a = view.attrs(e);
+            match a.open {
+                true => a.free_flow_s,
+                false => CLOSED_S,
+            }
+        })
+        .collect()
+}
+
 /// Static user-equilibrium assignment for one hour.
 ///
 /// `warm` is the previous hour's volumes. It is used only to price the first
