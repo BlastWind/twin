@@ -7,8 +7,8 @@
  */
 
 import { decode as cborDecode, encode as cborEncode } from 'cbor-x'
-import type { EdgeId, ScenarioDTO } from '../sim/protocol'
-import { EMPTY_SCENARIO } from '../sim/protocol'
+import type { EdgeId, EditDTO, RouteId, ScenarioDTO } from '../sim/protocol'
+import { EMPTY_SCENARIO, isEdgeEdit } from '../sim/protocol'
 import type { ManifestHash } from '../graph/manifest'
 
 export type ScenarioCode = string & { readonly __brand: 'ScenarioCode' }
@@ -35,26 +35,38 @@ const fromBase64Url = (code: string): Uint8Array => {
  * Edits are re-normalised on the way out so two scenarios that differ only in
  * edit order or in `undefined` fields encode to the same string.
  */
+/**
+ * What an edit is *about*: one edge, or one route. Two edits with the same
+ * target cannot coexist — applying one replaces the other — and it doubles as
+ * the canonical sort key, so edge edits sort before transit edits by id.
+ */
+const editTarget = (e: EditDTO): string =>
+  isEdgeEdit(e) ? `0:${String(e.edge).padStart(12, '0')}` : `1:${e.route_id}`
+
+const canonicalEdit = (e: EditDTO): EditDTO => {
+  if (e.type === 'CloseEdge') return { type: 'CloseEdge', edge: e.edge }
+  if (e.type === 'SetEdge')
+    return {
+      type: 'SetEdge',
+      edge: e.edge,
+      ...(e.lanes === undefined ? {} : { lanes: e.lanes }),
+      ...(e.speed_mps === undefined ? {} : { speed_mps: e.speed_mps }),
+      ...(e.capacity_vph === undefined ? {} : { capacity_vph: e.capacity_vph }),
+    }
+  return e.op === 'RemoveRoute'
+    ? { type: 'TransitEdit', op: 'RemoveRoute', route_id: e.route_id }
+    : { type: 'TransitEdit', op: 'AddPattern', route_id: e.route_id, stops: [...e.stops], headway_s: e.headway_s }
+}
+
 const canonical = (s: ScenarioDTO): ScenarioDTO => ({
-  edits: [...s.edits]
-    .sort((a, b) => a.edge - b.edge || a.type.localeCompare(b.type))
-    .map((e) =>
-      e.type === 'CloseEdge'
-        ? { type: 'CloseEdge' as const, edge: e.edge }
-        : {
-            type: 'SetEdge' as const,
-            edge: e.edge,
-            ...(e.lanes === undefined ? {} : { lanes: e.lanes }),
-            ...(e.speed_mps === undefined ? {} : { speed_mps: e.speed_mps }),
-            ...(e.capacity_vph === undefined ? {} : { capacity_vph: e.capacity_vph }),
-          },
-    ),
+  edits: [...s.edits].sort((a, b) => editTarget(a).localeCompare(editTarget(b))).map(canonicalEdit),
 })
 
 export const encodeScenario = (s: ScenarioDTO): ScenarioCode => toBase64Url(cborEncode(canonical(s)))
 
 const isEdit = (v: unknown): boolean => {
-  const e = v as { type?: unknown; edge?: unknown }
+  const e = v as { type?: unknown; edge?: unknown; route_id?: unknown }
+  if (e?.type === 'TransitEdit') return typeof e.route_id === 'string'
   return (e?.type === 'CloseEdge' || e?.type === 'SetEdge') && typeof e.edge === 'number'
 }
 
@@ -110,10 +122,15 @@ export const clearDraft = async (manifest: ManifestHash, name: DraftName = AUTOS
 export const closeEdge = (edge: EdgeId): ScenarioDTO['edits'][number] => ({ type: 'CloseEdge', edge })
 
 /** Applying an edit replaces any prior edit on the same edge. */
-export const withEdit = (s: ScenarioDTO, edit: ScenarioDTO['edits'][number]): ScenarioDTO => ({
-  edits: [...s.edits.filter((e) => e.edge !== edit.edge), edit],
+export const withEdit = (s: ScenarioDTO, edit: EditDTO): ScenarioDTO => ({
+  edits: [...s.edits.filter((e) => editTarget(e) !== editTarget(edit)), edit],
 })
 
 export const withoutEdge = (s: ScenarioDTO, edge: EdgeId): ScenarioDTO => ({
-  edits: s.edits.filter((e) => e.edge !== edge),
+  edits: s.edits.filter((e) => !isEdgeEdit(e) || e.edge !== edge),
+})
+
+/** Both the add and the remove for one route, so undoing a route is one step. */
+export const withoutRoute = (s: ScenarioDTO, route: RouteId): ScenarioDTO => ({
+  edits: s.edits.filter((e) => e.type !== 'TransitEdit' || e.route_id !== route),
 })

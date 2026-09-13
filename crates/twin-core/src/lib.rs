@@ -32,7 +32,7 @@ pub use graph_schema::{
 };
 pub use grid::{BBox, GridSchema, DEFAULT_CELL_M};
 pub use ids::{ChunkId, EdgeId, Hour, NodeId, RoadClass, ZoneId, HOURS_PER_DAY};
-pub use routing::{nested_dissection_order, Skim};
+pub use routing::{nested_dissection_order, restrict_order, OneToAll, Skim};
 pub use scenario::{Edit, Scenario, ScenarioView, TransitEdit};
 pub use schema::{AlignedBytes, SchemaError};
 pub use transit::{

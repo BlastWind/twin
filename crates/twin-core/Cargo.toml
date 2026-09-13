@@ -9,8 +9,13 @@ description = "Pure graph + binary-schema core for the twin digital-twin project
 bytemuck = { workspace = true }
 thiserror = { workspace = true }
 cch = "0.3.0"
-
-# Origins are independent, so all-or-nothing loading forks over them natively.
-# wasm32 has no threads here, and `assign` falls back to a serial loop.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Origins are independent, so all-or-nothing loading forks over them. Native
+# builds always do; wasm32 does only under `parallel`, where the embedder
+# (wasm-bindgen-rayon) has started a worker pool. Without it rayon still
+# compiles and degrades to a serial loop, so the feature gate is about
+# correctness of intent, not about linking.
 rayon = "1.10"
+
+[features]
+default = []
+parallel = []

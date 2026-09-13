@@ -3,9 +3,9 @@
 use crate::config::PipelineConfig;
 use crate::graph_io::LoadedGraph;
 use crate::lodes::{self, DemandBuild};
+use crate::snap::NodeIndex;
 use anyhow::Result;
 use std::collections::HashMap;
-use twin_core::grid::haversine_m;
 use twin_core::{
     demand::{DemandMetaSchema, DemandSchema, OdTripleSchema, NHTS_HOUR_PROFILE},
     nested_dissection_order, CchOrderSchema, GraphView, GridSchema, OrderKind,
@@ -14,78 +14,6 @@ use twin_core::{
 /// Daily vehicle trips the gravity fallback spreads over the study area. Sized
 /// for a county of ~1.15 M people at ~3 trips a day, half of them internal.
 const SYNTHETIC_DAILY_TRIPS: f64 = 1_500_000.0;
-
-/// Nearest graph node to each zone centroid.
-///
-/// Nodes are bucketed into the chunk grid once; a lookup then walks outward
-/// ring by ring and stops as soon as the ring's inner distance exceeds the best
-/// hit, so the answer is exact rather than "good enough".
-struct NodeIndex<'a> {
-    view: GraphView<'a>,
-    grid: GridSchema,
-    buckets: HashMap<(u32, u32), Vec<u32>>,
-}
-
-impl<'a> NodeIndex<'a> {
-    fn new(view: GraphView<'a>, grid: GridSchema) -> Self {
-        let mut buckets: HashMap<(u32, u32), Vec<u32>> = HashMap::new();
-        for (i, n) in view.nodes().iter().enumerate() {
-            buckets
-                .entry(grid.cell_xy(n.lon as f64, n.lat as f64))
-                .or_default()
-                .push(i as u32);
-        }
-        Self {
-            view,
-            grid,
-            buckets,
-        }
-    }
-
-    fn nearest(&self, lon: f64, lat: f64) -> Option<u32> {
-        let (cx, cy) = self.grid.cell_xy(lon, lat);
-        let cell_m = self.grid.cell_lat_deg * 111_320.0;
-        let mut best: Option<(f64, u32)> = None;
-        for r in 0..=self.grid.cols.max(self.grid.rows) {
-            // Everything in this ring is at least (r - 1) cells away, so once
-            // that floor beats the best hit there is nothing left to find.
-            if let Some((d, _)) = best {
-                if d < (r.saturating_sub(1)) as f64 * cell_m {
-                    break;
-                }
-            }
-            for (x, y) in ring_cells(cx, cy, r, self.grid.cols, self.grid.rows) {
-                for &i in self.buckets.get(&(x, y)).map(Vec::as_slice).unwrap_or(&[]) {
-                    let n = &self.view.nodes()[i as usize];
-                    let d = haversine_m(lon, lat, n.lon as f64, n.lat as f64);
-                    if best.is_none_or(|(bd, _)| d < bd) {
-                        best = Some((d, i));
-                    }
-                }
-            }
-        }
-        best.map(|(_, i)| i)
-    }
-}
-
-/// The cells exactly `r` steps from `(cx, cy)` in Chebyshev distance, clipped
-/// to the grid.
-fn ring_cells(cx: u32, cy: u32, r: u32, cols: u32, rows: u32) -> Vec<(u32, u32)> {
-    let (cx, cy, r) = (cx as i64, cy as i64, r as i64);
-    let mut out = Vec::new();
-    for dy in -r..=r {
-        for dx in -r..=r {
-            if dx.abs() != r && dy.abs() != r {
-                continue;
-            }
-            let (x, y) = (cx + dx, cy + dy);
-            if (0..cols as i64).contains(&x) && (0..rows as i64).contains(&y) {
-                out.push((x as u32, y as u32));
-            }
-        }
-    }
-    out
-}
 
 /// A zone centroid and the node count behind it: `(lon, lat, mass)`.
 type Cell = (f64, f64, u32);

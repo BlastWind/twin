@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getSimClient } from '../sim/client'
-import type { EdgeId, EditDTO, ScenarioDTO } from '../sim/protocol'
+import { isEdgeEdit, type EdgeId, type EditDTO, type ScenarioDTO } from '../sim/protocol'
 import { useScenarioStore, useUiStore, useWorldStore } from '../state/stores'
 import { closeEdge, loadDraft, saveDraft, scenarioFromHash, withEdit, withoutEdge, writeHash } from '../scenario/codec'
 
@@ -65,7 +65,7 @@ export const ScenarioEditor = () => {
     getSimClient()?.run('scenario', next)
   }
 
-  const existing = selected === null ? undefined : scenario.edits.find((e) => e.edge === selected)
+  const existing = selected === null ? undefined : scenario.edits.filter(isEdgeEdit).find((e) => e.edge === selected)
 
   return (
     <div className="panel editor">
@@ -111,7 +111,7 @@ export const ScenarioEditor = () => {
         </div>
       )}
       <ul className="edits">
-        {scenario.edits.map((e) => (
+        {scenario.edits.filter(isEdgeEdit).map((e) => (
           <li key={`${e.type}-${e.edge}`} onClick={() => select(e.edge)}>
             <code>{e.type}</code> {e.edge}
           </li>

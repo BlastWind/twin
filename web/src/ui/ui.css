@@ -164,3 +164,13 @@ button.link { background: none; border: none; color: var(--dim); text-decoration
 .estimate { margin: 2px 0 4px; font-size: 11px; color: var(--dim); }
 .estimate.heavy { color: #e8a04a; }
 .warn-tag { display: block; color: #ff9c8d; margin-top: 2px; }
+
+.layer-group { margin-top: 6px; }
+.layer-group h3 {
+  margin: 0 0 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6c7686;
+}

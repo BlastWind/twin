@@ -30,7 +30,7 @@ export type ResultKind = 'baseline' | 'scenario'
  * — field names are snake_case because this object *is* the wire format handed
  * to `runHour`; there is no second transformation.
  */
-export type EditDTO =
+export type EdgeEditDTO =
   | { readonly type: 'CloseEdge'; readonly edge: EdgeId }
   | {
       readonly type: 'SetEdge'
@@ -40,11 +40,39 @@ export type EditDTO =
       readonly capacity_vph?: number
     }
 
+export type RouteId = string & { readonly __brand: 'RouteId' }
+export type NodeId = number & { readonly __brand: 'NodeId' }
+
+/**
+ * Transit edits ride in the same `edits` array so a scenario stays one object
+ * in the URL hash and one JSON string at the wasm boundary.
+ *
+ * The road solver ignores them today — they change isochrones only, and the UI
+ * says so. `stops` are graph node ids, in service order.
+ */
+export type TransitEditDTO =
+  | {
+      readonly type: 'TransitEdit'
+      readonly op: 'AddPattern'
+      readonly route_id: RouteId
+      readonly stops: readonly NodeId[]
+      readonly headway_s: number
+    }
+  | { readonly type: 'TransitEdit'; readonly op: 'RemoveRoute'; readonly route_id: RouteId }
+
+export type EditDTO = EdgeEditDTO | TransitEditDTO
+
+export const isEdgeEdit = (e: EditDTO): e is EdgeEditDTO => e.type !== 'TransitEdit'
+
 export type ScenarioDTO = { readonly edits: readonly EditDTO[] }
 
 export const EMPTY_SCENARIO: ScenarioDTO = { edits: [] }
 
-export const editedEdges = (s: ScenarioDTO): ReadonlySet<EdgeId> => new Set(s.edits.map((e) => e.edge))
+export const editedEdges = (s: ScenarioDTO): ReadonlySet<EdgeId> =>
+  new Set(s.edits.filter(isEdgeEdit).map((e) => e.edge))
+
+export const transitEdits = (s: ScenarioDTO): readonly TransitEditDTO[] =>
+  s.edits.filter((e): e is TransitEditDTO => e.type === 'TransitEdit')
 
 // ---------- results ----------
 
@@ -53,6 +81,36 @@ export type KpiDTO = {
   readonly vht: number
   readonly meanDelayS: number
   readonly topEdges: readonly { readonly edge: EdgeId; readonly vc: number }[]
+}
+
+/** Isochrone origin and budget; `hour` picks the transit timetable slice. */
+export type IsochroneRequestDTO = {
+  readonly lon: number
+  readonly lat: number
+  readonly hour: Hour
+  readonly budgetMin: number
+}
+
+export type ReachSummaryDTO = { readonly nodes: number; readonly population: number }
+
+/**
+ * `pairs` is the contract's flat `[node_id, seconds, …]`. `positions` is the
+ * same rows resolved to `[lon, lat, …]` by the worker, which is the only place
+ * that holds the node table; without it the main thread could not draw them.
+ */
+export type ReachResultDTO = {
+  readonly request: IsochroneRequestDTO
+  readonly pairs: Float32Array
+  readonly positions: Float32Array
+  readonly summary: ReachSummaryDTO
+}
+
+/** One count station: observed AADT against the modeled 24 h total. */
+export type CalibrationDTO = {
+  readonly stationId: number
+  readonly edge: EdgeId
+  readonly aadt: number
+  readonly modeledDaily: number
 }
 
 export type StatsDTO = {
@@ -90,6 +148,10 @@ export type RequestDTO =
   | { readonly type: 'run'; readonly seq: number; readonly payload: RunRequestDTO }
   | { readonly type: 'select-hour'; readonly seq: number; readonly payload: SelectHourDTO }
   | { readonly type: 'cancel'; readonly seq: number; readonly payload: { readonly id: RunId } }
+  | { readonly type: 'load-transit'; readonly seq: number; readonly payload: LoadBlobDTO }
+  | { readonly type: 'load-counts'; readonly seq: number; readonly payload: LoadBlobDTO }
+  | { readonly type: 'isochrone'; readonly seq: number; readonly payload: IsochroneRequestDTO }
+  | { readonly type: 'calibration'; readonly seq: number; readonly payload: Record<string, never> }
 
 export type RequestType = RequestDTO['type']
 
@@ -129,6 +191,8 @@ export type ResponseDTO =
   | { readonly type: 'edge-order'; readonly seq: number; readonly payload: EdgeOrderDTO }
   | { readonly type: 'hour-result'; readonly seq: number; readonly payload: HourResultDTO }
   | { readonly type: 'run-done'; readonly seq: number; readonly payload: { readonly id: RunId; readonly kind: ResultKind } }
+  | { readonly type: 'reach'; readonly seq: number; readonly payload: ReachResultDTO }
+  | { readonly type: 'calibration'; readonly seq: number; readonly payload: { readonly rows: readonly CalibrationDTO[] } }
   | { readonly type: 'error'; readonly seq: number; readonly payload: WorkerErrorDTO }
 
 export type ResponseType = ResponseDTO['type']
@@ -146,6 +210,8 @@ export const encodeRequest = (req: RequestDTO): { readonly message: RequestDTO; 
       return { message: req, transfer: [req.payload.bytes] }
     case 'load-demand':
     case 'load-cch-order':
+    case 'load-transit':
+    case 'load-counts':
       return { message: req, transfer: [req.payload.bytes] }
     default:
       return { message: req, transfer: [] }
@@ -164,6 +230,8 @@ export const encodeResponse = (res: ResponseDTO): { readonly message: ResponseDT
     }
     case 'edge-order':
       return { message: res, transfer: [res.payload.edges.buffer] as Transferable[] }
+    case 'reach':
+      return { message: res, transfer: [res.payload.pairs.buffer, res.payload.positions.buffer] as Transferable[] }
     default:
       return { message: res, transfer: [] }
   }
@@ -183,6 +251,10 @@ const REQUEST_TYPES: ReadonlySet<string> = new Set<RequestType>([
   'run',
   'select-hour',
   'cancel',
+  'load-transit',
+  'load-counts',
+  'isochrone',
+  'calibration',
 ])
 const RESPONSE_TYPES: ReadonlySet<string> = new Set<ResponseType>([
   'ready',
@@ -192,6 +264,8 @@ const RESPONSE_TYPES: ReadonlySet<string> = new Set<ResponseType>([
   'edge-order',
   'hour-result',
   'run-done',
+  'reach',
+  'calibration',
   'error',
 ])
 

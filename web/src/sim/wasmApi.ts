@@ -10,7 +10,7 @@
 
 import { decodeChunk, type GraphChunkSchema } from '../graph/schema'
 import type { NodeIndex } from './nodeIndex'
-import type { ScenarioDTO } from './protocol'
+import { isEdgeEdit, type ScenarioDTO } from './protocol'
 
 export type WasmBackendKind = 'wasm' | 'wasm-mt' | 'stub'
 
@@ -217,7 +217,7 @@ export const createStubSolver = (): SolverApi => {
     const parsed = JSON.parse(json) as ScenarioDTO
     const closed = new Set<number>()
     const capScale = new Map<number, number>()
-    parsed.edits.forEach((e) => {
+    parsed.edits.filter(isEdgeEdit).forEach((e) => {
       if (e.type === 'CloseEdge') closed.add(e.edge)
       else if (e.capacity_vph !== undefined) capScale.set(e.edge, e.capacity_vph)
       else if (e.lanes !== undefined) capScale.set(e.edge, e.lanes * 900)
