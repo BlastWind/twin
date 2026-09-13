@@ -180,8 +180,13 @@ const enableAllLayers = async (page: Page): Promise<number> => {
   return n
 }
 
-/** Drops a reach origin at the camera centre and waits for the first result. */
-const requestIsochrone = async (page: Page): Promise<void> => {
+/**
+ * Drops a reach origin at the camera centre and returns how long the first
+ * result took. A *duration*, not a page timestamp: when the harness gets round
+ * to asking says nothing about how long the answer takes.
+ */
+const requestIsochrone = async (page: Page): Promise<Ms> => {
+  const started = Date.now()
   await page.evaluate(() => {
     const g = globalThis as {
       __twinMap?: { getCenter: () => { lng: number; lat: number } }
@@ -197,6 +202,7 @@ const requestIsochrone = async (page: Page): Promise<void> => {
       { timeout: 60_000 },
     )
     .catch(() => undefined)
+  return Date.now() - started
 }
 
 /** CDP heap usage: exact, unlike the quantized `performance.memory`. */
@@ -240,8 +246,7 @@ test('browser perf harness', async ({ page }) => {
   // Phase-3 interaction with a latency a user waits on.
   const layersOn = await enableAllLayers(page)
   const heapAllLayers = await heapBytes(session)
-  await requestIsochrone(page)
-  const firstIsochroneMs = await markMs(page, 'first-isochrone')
+  const firstIsochroneMs = await requestIsochrone(page)
   const reachNodes = await gauge(page, 'reachNodes')
 
   const loadMetrics: Results = {
