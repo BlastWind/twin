@@ -19,7 +19,7 @@ const result = (h: number, vc: readonly number[], kind: ResultKind = 'baseline')
   volume: Float32Array.from(vc, (v) => v * 1000),
   vc: Float32Array.from(vc),
   delay: Float32Array.from(vc, (v) => v * 10),
-  kpis: { vmt: h * 100, vht: h * 4, meanDelayS: h / 2, topEdges: [{ edge: edgeId(h), vc: vc[0] }] },
+  kpis: { vmt: h * 100, vht: h * 4, meanDelayS: h / 2, topEdges: [{ edge: edgeId(h), vc: vc[0]! }] },
 })
 
 describe('result cache', () => {
@@ -62,7 +62,7 @@ describe('result cache', () => {
     const cache = [7, 8, 17].reduce((c, h) => putHour(c, result(h, [h / 20])), EMPTY_CACHE)
     const daily = dailyKpis(cache)
     expect(daily?.vmt).toBe((7 + 8 + 17) * 100)
-    expect(daily?.topEdges[0].edge).toBe(17)
+    expect(daily?.topEdges[0]!.edge).toBe(17)
     expect(dailyKpis(EMPTY_CACHE)).toBeUndefined()
   })
 

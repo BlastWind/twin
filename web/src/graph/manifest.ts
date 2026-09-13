@@ -113,7 +113,7 @@ export const orderByDistance = (
   center: readonly [number, number],
 ): readonly ChunkKey[] => {
   const dist = (key: ChunkKey): number => {
-    const [cx, cy] = key.split('_').map(Number)
+    const [cx, cy] = key.split('_').map(Number) as [number, number]
     const lon = m.grid.minLon + (cx + 0.5) * m.grid.cellLonDeg
     const lat = m.grid.minLat + (cy + 0.5) * m.grid.cellLatDeg
     return (lon - center[0]) ** 2 + (lat - center[1]) ** 2

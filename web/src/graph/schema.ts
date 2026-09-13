@@ -124,7 +124,7 @@ const sectionOpt = <T>(f: FileView, kinds: readonly number[], ctor: TypedCtor<T>
   if (entry.offset + entry.len * expect > f.bytes.byteLength) {
     throw new SchemaError(`section ${entry.kind}: runs past end of buffer`)
   }
-  return new ctor(f.bytes.buffer, start, count)
+  return new ctor(f.bytes.buffer as ArrayBuffer, start, count)
 }
 
 const section = <T>(f: FileView, kind: SectionKind, ctor: TypedCtor<T>, stride = 1): T => {
@@ -185,12 +185,12 @@ export const decodeIndex = (buffer: ArrayBuffer): GraphIndexSchema => {
     const o = i * CHUNK_ENTRY_WORDS
     return {
       chunkId: flat[o] as ChunkIx,
-      cx: flat[o + 1],
-      cy: flat[o + 2],
-      nodeCount: flat[o + 3],
-      edgeCount: flat[o + 4],
-      nodeGidOffset: flat[o + 5],
-      edgeGidOffset: flat[o + 6],
+      cx: flat[o + 1]!,
+      cy: flat[o + 2]!,
+      nodeCount: flat[o + 3]!,
+      edgeCount: flat[o + 4]!,
+      nodeGidOffset: flat[o + 5]!,
+      edgeGidOffset: flat[o + 6]!,
     }
   })
   return { grid: decodeGrid(f), chunks }
@@ -234,7 +234,7 @@ export type GraphChunkSchema = {
 
 const decodeMeta = (f: FileView): ChunkMetaSchema => {
   const m = section(f, SectionKind.ChunkMeta, Uint32Array, 4)
-  return { chunkId: m[0] as ChunkIx, nodeCount: m[1], edgeCount: m[2], ghostNodeCount: m[3] }
+  return { chunkId: m[0] as ChunkIx, nodeCount: m[1]!, edgeCount: m[2]!, ghostNodeCount: m[3]! }
 }
 
 export const decodeChunk = (buffer: ArrayBuffer): GraphChunkSchema => {
@@ -311,11 +311,11 @@ export const MAJOR_CLASS_BYTES: ReadonlySet<number> = new Set([0, 1, 2, 3])
 export const edgeGeometry = (c: GraphChunkSchema, edge: LocalEdgeIx): Float32Array => {
   const { geomOffsets, geomLonLat } = c
   if (geomOffsets && geomLonLat) {
-    const a = geomOffsets[edge] * 2
-    const b = geomOffsets[edge + 1] * 2
+    const a = geomOffsets[edge]! * 2
+    const b = geomOffsets[edge + 1]! * 2
     if (b > a) return geomLonLat.subarray(a, b)
   }
-  const from = c.edgeFrom[edge] * 2
-  const to = c.edgeTo[edge] * 2
-  return Float32Array.of(c.nodeLonLat[from], c.nodeLonLat[from + 1], c.nodeLonLat[to], c.nodeLonLat[to + 1])
+  const from = c.edgeFrom[edge]! * 2
+  const to = c.edgeTo[edge]! * 2
+  return Float32Array.of(c.nodeLonLat[from]!, c.nodeLonLat[from + 1]!, c.nodeLonLat[to]!, c.nodeLonLat[to + 1]!)
 }

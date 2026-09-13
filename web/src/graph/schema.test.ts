@@ -28,7 +28,7 @@ const writeFile = (magic: string, version: number, sections: readonly Section[])
     dv.setUint32(at, s.kind, true)
     dv.setUint32(at + 4, s.elemSize, true)
     dv.setUint32(at + 8, s.len, true)
-    dv.setBigUint64(at + 16, BigInt(offsets[i]), true)
+    dv.setBigUint64(at + 16, BigInt(offsets[i]!), true)
     u8.set(s.payload, offsets[i])
   })
   return buf
@@ -79,7 +79,7 @@ describe('chunk decoder', () => {
     expect(c.version).toBe(1)
     expect(c.meta).toEqual({ chunkId: 7, nodeCount: 2, edgeCount: 1, ghostNodeCount: 0 })
     expect([...c.edgeGid]).toEqual([555])
-    expect(roadClass(c.edgeClass[0])).toBe('primary')
+    expect(roadClass(c.edgeClass[0]!)).toBe('primary')
     expect(c.geomOffsets).toBeUndefined()
   })
 

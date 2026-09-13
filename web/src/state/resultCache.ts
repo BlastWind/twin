@@ -47,7 +47,7 @@ export const diffVc = (baseline: HourResultDTO | undefined, scenario: HourResult
   if (!baseline || !scenario) return new Float32Array(0)
   const n = Math.min(baseline.vc.length, scenario.vc.length)
   const out = new Float32Array(n)
-  for (let i = 0; i < n; i += 1) out[i] = scenario.vc[i] - baseline.vc[i]
+  for (let i = 0; i < n; i += 1) out[i] = scenario.vc[i]! - baseline.vc[i]!
   return out
 }
 
@@ -72,7 +72,7 @@ export const dailyKpis = (cache: ResultCache): KpiDTO | undefined => {
   if (hours.length === 0) return undefined
   const parts = hours.map((h) => cache[h]!.kpis)
   // the busiest hour's corridors are the interesting ones, not a blend
-  const peak = parts.reduce((best, k) => (k.vmt > best.vmt ? k : best), parts[0])
+  const peak = parts.reduce((best, k) => (k.vmt > best.vmt ? k : best), parts[0]!)
   return {
     vmt: parts.reduce((a, k) => a + k.vmt, 0),
     vht: parts.reduce((a, k) => a + k.vht, 0),
