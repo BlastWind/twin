@@ -105,44 +105,52 @@ arcgis_dump() {
   fi
   local dir="$GIS_DIR/$name"
   mkdir -p "$dir"
-  local offset=0 page=0 total=0
+  local offset=0 page=0 total=0 n
+  # Terminate on an empty page, not on a short one: several layers cap
+  # maxRecordCount below PAGE_SIZE, so every page comes back "short".
   while :; do
     local out
     out="$(printf '%s/page_%05d.geojson' "$dir" "$page")"
-    if [[ -s "$out" ]]; then
-      local n; n="$(python3 -c "import json,sys;print(len(json.load(open(sys.argv[1])).get('features',[])))" "$out" 2>/dev/null || echo 0)"
-      total=$(( total + n )); page=$(( page + 1 )); offset=$(( offset + PAGE_SIZE ))
-      [[ "$n" -lt "$PAGE_SIZE" ]] && break || continue
+    if [[ ! -s "$out" ]]; then
+      local args=(-sS -m 300 -G "$url/query"
+        --data-urlencode "where=$where"
+        --data-urlencode "outFields=*"
+        --data-urlencode "outSR=4326"
+        --data-urlencode "f=geojson"
+        --data-urlencode "resultOffset=$offset"
+        --data-urlencode "resultRecordCount=$PAGE_SIZE")
+      if [[ "$clip" == "yes" ]]; then
+        args+=(--data-urlencode "geometry=$BBOX"
+               --data-urlencode "geometryType=esriGeometryEnvelope"
+               --data-urlencode "inSR=4326"
+               --data-urlencode "spatialRel=esriSpatialRelIntersects")
+      fi
+      if ! curl "${args[@]}" -o "$out.part.$$"; then
+        rm -f "$out.part.$$"
+        echo "error   $name page $page failed; the ingest stage will use what is on disk" >&2
+        return 1
+      fi
+      mv "$out.part.$$" "$out"
     fi
-    local args=(-sS -m 300 -G "$url/query"
-      --data-urlencode "where=$where"
-      --data-urlencode "outFields=*"
-      --data-urlencode "outSR=4326"
-      --data-urlencode "f=geojson"
-      --data-urlencode "resultOffset=$offset"
-      --data-urlencode "resultRecordCount=$PAGE_SIZE")
-    if [[ "$clip" == "yes" ]]; then
-      args+=(--data-urlencode "geometry=$BBOX"
-             --data-urlencode "geometryType=esriGeometryEnvelope"
-             --data-urlencode "inSR=4326"
-             --data-urlencode "spatialRel=esriSpatialRelIntersects")
-    fi
-    if ! curl "${args[@]}" -o "$out.part"; then
-      rm -f "$out.part"
-      echo "error   $name page $page failed; the ingest stage will use what is on disk" >&2
-      return 1
-    fi
-    mv "$out.part" "$out"
-    local n; n="$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(len(d.get('features',[])) if 'error' not in d else -1)" "$out" 2>/dev/null || echo -1)"
+    n="$(feature_count "$out")"
     if [[ "$n" -lt 0 ]]; then
       echo "error   $name page $page: $(head -c 300 "$out")" >&2; rm -f "$out"; return 1
     fi
-    total=$(( total + n ))
+    [[ "$n" -eq 0 ]] && break
+    total=$(( total + n )); offset=$(( offset + n )); page=$(( page + 1 ))
     printf '\r  %-16s %7d features' "$name" "$total" >&2
-    [[ "$n" -lt "$PAGE_SIZE" ]] && break
-    page=$(( page + 1 )); offset=$(( offset + PAGE_SIZE ))
   done
   printf '\r  %-16s %7d features\n' "$name" "$total" >&2
+}
+
+# Features in one page file; -1 when the server returned an error document.
+feature_count() {
+  python3 -c "import json,sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    print(-1); raise SystemExit
+print(-1 if 'error' in d else len(d.get('features', [])))" "$1" 2>/dev/null || echo -1
 }
 
 if [[ "${TWIN_SKIP_GIS:-0}" != "1" ]]; then
@@ -165,10 +173,10 @@ fetch_gtfs() {
   local name="$1" url="$2"; shift 2
   local out="$GTFS_DIR/$name.zip"
   if [[ -s "$out" ]]; then echo "have    $out ($(du -h "$out" | cut -f1))"; return 0; fi
-  if curl -fL --retry 3 --connect-timeout 20 -m 300 "$@" -o "$out.part" "$url"; then
-    mv "$out.part" "$out"; echo "saved   $out ($(du -h "$out" | cut -f1))"
+  if curl -fL --retry 3 --connect-timeout 20 -m 300 "$@" -o "$out.part.$$" "$url"; then
+    mv "$out.part.$$" "$out"; echo "saved   $out ($(du -h "$out" | cut -f1))"
   else
-    rm -f "$out.part"; echo "error   $name GTFS download failed; skipping that agency" >&2
+    rm -f "$out.part.$$"; echo "error   $name GTFS download failed; skipping that agency" >&2
   fi
 }
 fetch_gtfs connector "https://www.fairfaxcounty.gov/connector/sites/connector/files/Assets/connector_gtfs.zip"
