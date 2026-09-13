@@ -4,6 +4,7 @@
  */
 
 import type { ChunkKey, ManifestHash } from '../graph/manifest'
+import type { WasmBackendKind } from './wasmApi'
 
 export type RunId = number & { readonly __brand: 'RunId' }
 export type Hour = number & { readonly __brand: 'Hour' }
@@ -59,7 +60,7 @@ export type StatsDTO = {
   readonly edges: number
   readonly chunksLoaded: number
   readonly wasmBytes: number
-  readonly backend: 'wasm' | 'stub'
+  readonly backend: WasmBackendKind
 }
 
 export type WorkerErrorCode = 'load-failed' | 'schema-mismatch' | 'run-failed' | 'unsupported'

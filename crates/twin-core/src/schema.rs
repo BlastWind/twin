@@ -152,6 +152,18 @@ pub enum SectionKind {
     HourProfile = 44,
     CchOrderMeta = 50,
     CchOrderRank = 51,
+    TransitMeta = 60,
+    StopNode = 61,
+    StopLonLat = 62,
+    PatternTable = 63,
+    PatternStops = 64,
+    PatternHopS = 65,
+    PatternHeadwayS = 66,
+    CountsMeta = 70,
+    CountStations = 71,
+    FeedsMeta = 80,
+    CrashCells = 81,
+    CrashEdges = 82,
 }
 
 /// A borrowed, decoded file: the header plus the section table, over the

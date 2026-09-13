@@ -9,15 +9,42 @@
  */
 
 import { decodeChunk, type GraphChunkSchema } from '../graph/schema'
+import type { NodeIndex } from './nodeIndex'
 import type { ScenarioDTO } from './protocol'
 
-export type WasmBackendKind = 'wasm' | 'stub'
+export type WasmBackendKind = 'wasm' | 'wasm-mt' | 'stub'
 
 export type KpiJsonDTO = {
   readonly vmt: number
   readonly vht: number
   readonly mean_delay_s: number
   readonly top_edges: readonly { readonly edge_id: number; readonly vc: number }[]
+}
+
+/**
+ * The Phase-3 transit/feeds surface (`twin-wasm/src/transit.rs`), separate from
+ * `SolverApi` because it lands later: a module can be a complete solver and
+ * still have none of it, in which case the worker substitutes `stubTransit`.
+ */
+export type TransitApi = {
+  readonly kind: WasmBackendKind
+  readonly loadTransit: (bytes: Uint8Array) => void
+  readonly loadCounts: (bytes: Uint8Array) => void
+  /** flat `[node_id, seconds, …]` pairs, per the contract. */
+  readonly isochrone: (lon: number, lat: number, hour: number, budgetMin: number) => Float32Array
+  /** `{"nodes":n,"population":p}` */
+  readonly reachSummaryJson: () => string
+  /** `[{"station_id":…,"edge_id":…,"aadt":…,"modeled_daily":…}]` */
+  readonly calibrationJson: () => string
+}
+
+export type ReachSummaryJsonDTO = { readonly nodes: number; readonly population: number }
+
+export type CalibrationJsonDTO = {
+  readonly station_id: number
+  readonly edge_id: number
+  readonly aadt: number
+  readonly modeled_daily: number
 }
 
 /** What the worker needs from a solver, real or stubbed. */
@@ -33,6 +60,8 @@ export type SolverApi = {
   readonly loadedEdgeIds: () => Uint32Array
   readonly kpisJson: () => string
   readonly stats: () => { nodes: number; edges: number; chunksLoaded: number; wasmBytes: number }
+  /** null until `twin-wasm/src/transit.rs` exports it. */
+  readonly transit: TransitApi | null
 }
 
 export const scenarioJson = (s: ScenarioDTO): string => JSON.stringify({ edits: s.edits })
@@ -41,8 +70,23 @@ export const scenarioJson = (s: ScenarioDTO): string => JSON.stringify({ edits: 
 
 // Absolute URLs: Vite's dev server rejects root-relative imports of /public
 // assets, but leaves a full URL alone. wasm-pack output is served as-is.
-const WASM_JS = new URL('/wasm/twin_wasm.js', self.location.origin).href
-const WASM_BG = new URL('/wasm/twin_wasm_bg.wasm', self.location.origin).href
+export type WasmDir = '/wasm-mt/' | '/wasm/'
+
+const abs = (path: string): string => new URL(path, self.location.origin).href
+
+const exists = async (url: string): Promise<boolean> =>
+  fetch(url, { method: 'HEAD' })
+    .then((r) => r.ok)
+    .catch(() => false)
+
+/**
+ * The threaded build is only usable on a cross-origin-isolated page (it needs
+ * `SharedArrayBuffer`), and it is only present once Phase 2.5 ships it. Both
+ * conditions are checked at runtime rather than at build time so one bundle
+ * works either way.
+ */
+export const pickWasmDir = async (): Promise<WasmDir> =>
+  globalThis.crossOriginIsolated === true && (await exists(abs('/wasm-mt/twin_wasm.js'))) ? '/wasm-mt/' : '/wasm/'
 
 /**
  * The Phase-1 module exposed a `TwinWorld` class; Phase 2 adds the solver
@@ -70,19 +114,44 @@ const bind = <T>(mod: WasmModule, world: WasmWorld, name: string): T | undefined
 
 const REQUIRED: readonly string[] = ['loadDemand', 'loadCchOrder', 'runHour', 'loadedEdgeIds', 'kpisJson']
 
+
+const TRANSIT_REQUIRED: readonly string[] = ['loadTransit', 'isochrone', 'reachSummary', 'loadCounts', 'calibration']
+
+const wasmTransit = (mod: WasmModule, world: WasmWorld, kind: WasmBackendKind): TransitApi | null => {
+  const fns = Object.fromEntries(TRANSIT_REQUIRED.map((n) => [n, bind(mod, world, n)]))
+  if (TRANSIT_REQUIRED.some((n) => !fns[n])) return null
+  return {
+    kind,
+    loadTransit: fns.loadTransit as TransitApi['loadTransit'],
+    loadCounts: fns.loadCounts as TransitApi['loadCounts'],
+    isochrone: fns.isochrone as TransitApi['isochrone'],
+    reachSummaryJson: fns.reachSummary as TransitApi['reachSummaryJson'],
+    calibrationJson: fns.calibration as TransitApi['calibrationJson'],
+  }
+}
+
 /** Resolves to the real solver, or `null` when the module is absent or is still Phase-1. */
 export const loadWasmSolver = async (): Promise<SolverApi | null> => {
-  const mod = await import(/* @vite-ignore */ WASM_JS)
+  const dir = await pickWasmDir()
+  const mod = await import(/* @vite-ignore */ abs(`${dir}twin_wasm.js`))
     .then((m) => m as WasmModule)
     .catch(() => null)
   if (!mod?.TwinWorld) return null
-  const memory = await mod.default({ module_or_path: WASM_BG }).then((o) => o.memory).catch(() => null)
+  const memory = await mod
+    .default({ module_or_path: abs(`${dir}twin_wasm_bg.wasm`) })
+    .then((o) => o.memory)
+    .catch(() => null)
   if (!memory) return null
   const world = new mod.TwinWorld()
+  // wasm-bindgen-rayon needs an explicit pool start; absent in the single-threaded build.
+  const initThreads = bind<(n: number) => Promise<void>>(mod, world, 'initThreadPool')
+  if (dir === '/wasm-mt/' && initThreads) await initThreads(navigator.hardwareConcurrency ?? 4).catch(() => undefined)
   const fns = Object.fromEntries(REQUIRED.map((n) => [n, bind(mod, world, n)]))
   if (REQUIRED.some((n) => !fns[n])) return null // Phase-1 module: no solver yet
+  const kind: WasmBackendKind = dir === '/wasm-mt/' ? 'wasm-mt' : 'wasm'
   return {
-    kind: 'wasm',
+    kind,
+    transit: wasmTransit(mod, world, kind),
     loadIndex: (b) => world.loadIndex(b),
     loadChunk: (id, b) => world.loadChunk(id, b),
     freeChunk: (id) => world.freeChunk(id),
@@ -158,6 +227,9 @@ export const createStubSolver = (): SolverApi => {
 
   return {
     kind: 'stub',
+    // the worker composes `createStubTransit`: it owns the node index and the
+    // hour cache that the stub calibration is derived from
+    transit: null,
     loadIndex: (b) => {
       nodes = b.byteLength >> 5
     },
@@ -217,6 +289,73 @@ export const createStubSolver = (): SolverApi => {
         .slice(0, 10)
       kpis = { vmt, vht, mean_delay_s: n ? delaySum / n : 0, top_edges: top }
       return out
+    },
+  }
+}
+
+// -------------------------------------------------------------- stub transit
+
+/**
+ * Stand-in for `twin-wasm/src/transit.rs` until it lands.
+ *
+ * `isochrone` is a straight-line reach over the resident nodes at a fixed
+ * door-to-door speed with a peak-hour penalty — enough to exercise the request
+ * shape, the four time bands and the recompute-on-hour-change path, and
+ * deliberately crude so nobody mistakes the picture for a routed isochrone.
+ *
+ * `calibration` needs modeled daily volumes, which live in the worker\'s hour
+ * cache, so the worker passes them in rather than this module reaching for
+ * them; the "stations" are then the busiest loaded edges with a synthetic AADT
+ * scattered around the model.
+ */
+const STUB_SPEED_KPH = 26
+const STUB_POP_PER_NODE = 3.4
+const STUB_STATIONS = 40
+const METRES_PER_DEG_LAT = 111_320
+/** A road network is not a straight line. */
+const STUB_DETOUR = 1.3
+
+/** Peak-hour slowdown, reusing the volume profile\'s shape. */
+const stubSpeedKph = (h: number): number => STUB_SPEED_KPH / (0.75 + 0.45 * hourFactor(h))
+
+/** Daily modeled volume per edge id, as the worker sees it after a 24 h run. */
+export type DailyByEdge = () => ReadonlyMap<number, number>
+
+export const createStubTransit = (nodes: NodeIndex, daily: DailyByEdge): TransitApi => {
+  let summary: ReachSummaryJsonDTO = { nodes: 0, population: 0 }
+
+  return {
+    kind: 'stub',
+    loadTransit: () => undefined,
+    loadCounts: () => undefined,
+    isochrone: (lon, lat, h, budgetMin) => {
+      const { nodes: gids, lonLat } = nodes.snapshot()
+      const mps = (stubSpeedKph(h) * 1000) / 3600
+      const budgetS = budgetMin * 60
+      const kx = Math.cos((lat * Math.PI) / 180)
+      const out: number[] = []
+      for (let i = 0; i < gids.length; i += 1) {
+        const dx = (lonLat[i * 2]! - lon) * kx * METRES_PER_DEG_LAT
+        const dy = (lonLat[i * 2 + 1]! - lat) * METRES_PER_DEG_LAT
+        const seconds = (Math.hypot(dx, dy) * STUB_DETOUR) / mps
+        if (seconds <= budgetS) out.push(gids[i]!, seconds)
+      }
+      summary = { nodes: out.length / 2, population: Math.round((out.length / 2) * STUB_POP_PER_NODE) }
+      return Float32Array.from(out)
+    },
+    reachSummaryJson: () => JSON.stringify(summary),
+    calibrationJson: () => {
+      const rows = [...daily()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, STUB_STATIONS)
+        .map(([edge_id, modeled_daily], i): CalibrationJsonDTO => ({
+          station_id: 900_000 + i,
+          edge_id,
+          // ±35% of the model, stable per edge: a plausible calibration cloud
+          aadt: Math.round(modeled_daily * (0.65 + 0.7 * hash01(edge_id))),
+          modeled_daily: Math.round(modeled_daily),
+        }))
+      return JSON.stringify(rows)
     },
   }
 }
