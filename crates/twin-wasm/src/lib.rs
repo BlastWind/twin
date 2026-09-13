@@ -6,6 +6,8 @@
 //! well would double the memory for no gain. `free_chunk` drops the chunk from
 //! the graph.
 
+mod transit;
+
 use serde::{Deserialize, Serialize};
 use twin_core::assign::{assign, AssignParams, HourResult};
 use twin_core::demand::DemandSchema;
