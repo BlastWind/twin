@@ -6,3 +6,4 @@ public/wasm/
 bench/results.json
 test-results/
 playwright-report/
+*.tsbuildinfo

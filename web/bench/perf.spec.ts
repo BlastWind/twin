@@ -81,17 +81,26 @@ const measureFps = async (page: Page, zoom: number): Promise<number> => {
   return Number(((frames.frames * 1000) / frames.ms).toFixed(1))
 }
 
-const heapBytes = async (cdp: CDPSession): Promise<number> => {
-  const { result } = (await cdp.send('Runtime.evaluate', {
-    expression: 'performance.memory ? performance.memory.usedJSHeapSize : 0',
-  })) as { result: { value?: number } }
-  return result.value ?? 0
+/**
+ * Software GL in CI is noisy; take the best of a few passes (the first pass
+ * also warms the tile cache and shaders) so the 15% threshold is meaningful.
+ */
+const bestFps = async (page: Page, zoom: number, passes = 3): Promise<number> => {
+  const runs: number[] = []
+  for (let i = 0; i < passes; i += 1) runs.push(await measureFps(page, zoom))
+  return Math.max(...runs)
 }
 
-test('browser perf harness', async ({ page, browser }) => {
-  const cdp = await browser.newBrowserCDPSession().catch(() => null)
-  void cdp
+/** CDP heap usage: exact, unlike the quantized `performance.memory`. */
+const heapBytes = async (cdp: CDPSession): Promise<number> => {
+  await cdp.send('HeapProfiler.collectGarbage').catch(() => undefined)
+  const usage = (await cdp.send('Runtime.getHeapUsage')) as { usedSize: number }
+  return Math.round(usage.usedSize)
+}
+
+test('browser perf harness', async ({ page }) => {
   const session = await page.context().newCDPSession(page)
+  await session.send('HeapProfiler.enable').catch(() => undefined)
 
   let transferBytes = 0
   page.on('response', (res) => {
@@ -115,9 +124,9 @@ test('browser perf harness', async ({ page, browser }) => {
     workerReadyMs: Number((await markMs(page, 'worker-ready')).toFixed(1)),
     heapBytesAfterLoad: await heapBytes(session),
     transferBytes,
-    fpsZ11: await measureFps(page, 11),
-    fpsZ13: await measureFps(page, 13),
-    fpsZ15: await measureFps(page, 15),
+    fpsZ11: await bestFps(page, 11),
+    fpsZ13: await bestFps(page, 13),
+    fpsZ15: await bestFps(page, 15),
   }
 
   writeJson(RESULTS, results)

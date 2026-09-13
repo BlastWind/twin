@@ -1,0 +1,11 @@
+{
+  "firstPaintMs": 420,
+  "firstTileMs": 1765.6,
+  "mapIdleMs": 1791,
+  "workerReadyMs": 481,
+  "heapBytesAfterLoad": 5363888,
+  "transferBytes": 495553,
+  "fpsZ11": 6.5,
+  "fpsZ13": 6.2,
+  "fpsZ15": 6.7
+}
