@@ -95,8 +95,14 @@ CRASH_YEAR_MIN="$(( $(date +%Y) - 3 ))"
 # resultOffset paging, one file per page so an interrupted run resumes. A page
 # with no features ends the walk; `exceededTransferLimit` is not relied on
 # because not every VDOT layer sets it.
+# TWIN_GIS_LAYERS, when set, is the space-separated subset of layers to fetch.
+# Two runs with disjoint subsets can page different layers in parallel; the
+# resume check makes an overlap harmless rather than corrupting a page.
 arcgis_dump() {
   local name="$1" url="$2" where="$3" clip="${4:-yes}"
+  if [[ -n "${TWIN_GIS_LAYERS:-}" && " $TWIN_GIS_LAYERS " != *" $name "* ]]; then
+    return 0
+  fi
   local dir="$GIS_DIR/$name"
   mkdir -p "$dir"
   local offset=0 page=0 total=0
