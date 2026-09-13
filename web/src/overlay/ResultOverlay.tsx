@@ -92,6 +92,8 @@ const layerProps = (
   colors: Uint8Array,
   onHover: (index: number, x: number, y: number) => void,
   onClick: (edge: EdgeId) => void,
+  /** false in reach/transit mode: there the click belongs to the tool, not the edge. */
+  pickable: boolean,
 ): Record<string, unknown> => ({
   id: 'twin-results',
   data: {
@@ -111,8 +113,8 @@ const layerProps = (
   jointRounded: true,
   capRounded: true,
   opacity: 0.9,
-  pickable: true,
-  autoHighlight: true,
+  pickable,
+  autoHighlight: pickable,
   highlightColor: [255, 255, 255, 120],
   onHover: (info: { index: number; x: number; y: number }) => onHover(info.index, info.x, info.y),
   onClick: (info: { index: number }) => {
@@ -156,6 +158,7 @@ export const ResultOverlay = () => {
   const select = useUiStore((s) => s.select)
   const baselineCache = useSimStore((s) => s.baseline)
   const scenarioCache = useSimStore((s) => s.scenario)
+  const tool = useUiStore((s) => s.tool)
   const reach = useReachStore((s) => s.result)
   const baseline = baselineCache[hour]
   const scenarioResult = scenarioCache[hour]
@@ -217,9 +220,10 @@ export const ResultOverlay = () => {
     gauge('overlayPaths', model.pathCount)
     const onHover = (index: number, x: number, y: number) =>
       setHover(index < 0 ? null : { edge: model.edges[index] as EdgeId, classByte: model.classes[index] ?? 9, x, y })
-    const paths = model.pathCount === 0 ? [] : [new deck.PathLayer(layerProps(model, colors, onHover, select))]
+    const paths =
+      model.pathCount === 0 ? [] : [new deck.PathLayer(layerProps(model, colors, onHover, select, tool === 'select'))]
     overlay.setProps({ layers: [...paths, ...reachLayers(deck, reach)] })
-  }, [deck, model, colors, hour, reach, setHover, select])
+  }, [deck, model, colors, hour, reach, tool, setHover, select])
 
   return null
 }
