@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # ---- defaults ----------------------------------------------------------------
-PLANETILER_VERSION="0.9.6"
+PLANETILER_VERSION="0.10.2"
 BBOX="-77.54,38.60,-77.04,39.06"            # Fairfax County + buffer
 MIN_ZOOM="4"
 MAX_ZOOM="15"
@@ -74,7 +74,7 @@ JAVA_BIN="${JAVA_BIN:-java}"
 if ! command -v "$JAVA_BIN" >/dev/null 2>&1; then
   log "ERROR: java not found. Planetiler needs Java 21+."; exit 1
 fi
-JAVA_MAJOR="$("$JAVA_BIN" -version 2>&1 | sed -n '1s/.*"\([0-9]*\).*/\1/p')"
+JAVA_MAJOR="$("$JAVA_BIN" -version 2>&1 | sed -n '1s/^[^"]*"\([0-9]*\).*/\1/p')"
 if [[ "${JAVA_MAJOR:-0}" -lt 21 ]]; then
   log "ERROR: java $JAVA_MAJOR found, Planetiler $PLANETILER_VERSION needs 21+."
   log "       install a JDK 21 and re-run with JAVA_HOME set."
