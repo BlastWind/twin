@@ -136,7 +136,6 @@ impl Skim {
     }
 }
 
-
 /// Distances from one source to *every* node, plus the shortest-path tree over
 /// the original edges — the pair all-or-nothing loading needs.
 ///

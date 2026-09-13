@@ -6,9 +6,17 @@
 
 use crate::demand::{return_share, DemandSchema};
 use crate::ids::{EdgeId, Hour};
+use crate::routing::{seconds_to_weight, OneToAll, Skim};
 use crate::scenario::{EdgeAttrs, ScenarioView};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
+
+/// Where the all-or-nothing loop may fork over origins.
+macro_rules! forked {
+    () => {
+        cfg!(any(not(target_arch = "wasm32"), feature = "parallel"))
+    };
+}
 
 /// A cost high enough that no route uses a closed edge, but finite, so a
 /// cut-off zone still produces numbers instead of `inf`.
@@ -280,38 +288,97 @@ impl Tree {
     }
 }
 
-/// All-or-nothing: every trip on its cheapest path under `cost`.
-fn all_or_nothing(topo: &Topology, cost: &[f32], origins: &[OriginDemand]) -> Vec<f32> {
-    let nodes = topo.offsets.len() - 1;
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use rayon::prelude::*;
-        origins
-            .par_iter()
-            .fold(
-                || (Tree::new(nodes), vec![0.0f32; cost.len()]),
-                |(mut tree, mut acc), o| {
-                    tree.load_origin(topo, cost, o, &mut acc);
-                    (tree, acc)
-                },
-            )
-            .map(|(_, acc)| acc)
-            .reduce(
-                || vec![0.0f32; cost.len()],
-                |mut a, b| {
-                    a.iter_mut().zip(b).for_each(|(x, y)| *x += y);
-                    a
-                },
-            )
+/// How all-or-nothing loading finds its shortest-path trees. An ADT, because
+/// the two arms want different preprocessing and different scratch, and a
+/// caller should never be able to ask for "CCH" without having handed over an
+/// order to build it from.
+pub enum Loader {
+    /// One binary-heap Dijkstra tree per origin. No preprocessing; the right
+    /// choice for a small study area or a one-shot pass.
+    Dijkstra,
+    /// A customizable contraction hierarchy, re-priced once per iteration and
+    /// swept once per origin. Pays a build up front and wins from ~10k nodes.
+    Cch(Box<Skim>),
+}
+
+impl Loader {
+    /// Build a hierarchy over `view`. `order` is a contraction order in the
+    /// view's dense node indices — see [`crate::routing::restrict_order`].
+    pub fn cch(view: &ScenarioView<'_>, order: &[u32]) -> Self {
+        Self::Cch(Box::new(Skim::build(view, order)))
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let mut tree = Tree::new(nodes);
-        let mut acc = vec![0.0f32; cost.len()];
-        for o in origins {
-            tree.load_origin(topo, cost, o, &mut acc);
+
+    fn fits(&self, view: &ScenarioView<'_>) -> bool {
+        match self {
+            Self::Dijkstra => true,
+            Self::Cch(skim) => skim.node_count() == view.node_count(),
+        }
+    }
+}
+
+/// Fold every origin's loading into one flow vector.
+///
+/// Scratch comes from `scratch` once per *chunk*, not once per origin: a
+/// node-sized tree is a megabyte, and allocating one per origin cost more than
+/// the search it served.
+fn fold_origins<S: Send>(
+    origins: &[OriginDemand],
+    edges: usize,
+    scratch: impl Fn() -> S + Sync + Send,
+    load: impl Fn(&mut S, &OriginDemand, &mut [f32]) + Sync + Send,
+) -> Vec<f32> {
+    let run = |chunk: &[OriginDemand]| -> Vec<f32> {
+        let mut state = scratch();
+        let mut acc = vec![0.0f32; edges];
+        for o in chunk {
+            load(&mut state, o, &mut acc);
         }
         acc
+    };
+    if !forked!() {
+        return run(origins);
+    }
+    use rayon::prelude::*;
+    let jobs = (rayon::current_num_threads() * 4).max(1);
+    let chunk = origins.len().div_ceil(jobs).max(1);
+    origins.par_chunks(chunk).map(run).reduce(
+        || vec![0.0f32; edges],
+        |mut a, b| {
+            a.iter_mut().zip(b).for_each(|(x, y)| *x += y);
+            a
+        },
+    )
+}
+
+/// All-or-nothing: every trip on its cheapest path under `cost`.
+fn all_or_nothing(
+    topo: &Topology,
+    cost: &[f32],
+    origins: &[OriginDemand],
+    loader: &mut Loader,
+) -> Vec<f32> {
+    let nodes = topo.offsets.len() - 1;
+    match loader {
+        Loader::Dijkstra => fold_origins(
+            origins,
+            cost.len(),
+            || Tree::new(nodes),
+            |tree, o, acc| tree.load_origin(topo, cost, o, acc),
+        ),
+        Loader::Cch(skim) => {
+            skim.customize_seconds(cost);
+            let weight: Vec<u32> = cost.iter().copied().map(seconds_to_weight).collect();
+            let skim: &Skim = skim;
+            fold_origins(
+                origins,
+                cost.len(),
+                || OneToAll::new(nodes),
+                |sweep, o, acc| {
+                    sweep.run(skim, o.node);
+                    sweep.load_tree(o.node, &topo.tail, &topo.head, &weight, &o.dests, acc);
+                },
+            )
+        }
     }
 }
 
@@ -422,9 +489,10 @@ pub fn all_or_nothing_pass(
     demand: &DemandSchema<'_>,
     hour: Hour,
     cost_s: &[f32],
+    loader: &mut Loader,
 ) -> Vec<f32> {
     let origins = origins_for(view, demand, hour);
-    all_or_nothing(&Topology::of(view), cost_s, &origins)
+    all_or_nothing(&Topology::of(view), cost_s, &origins, loader)
 }
 
 /// Free-flow travel times, the natural starting costs.
@@ -440,6 +508,37 @@ pub fn free_flow_costs(view: &ScenarioView<'_>) -> Vec<f32> {
         .collect()
 }
 
+/// Everything a run needs beyond the graph, the demand and the hour: the BPR
+/// and convergence knobs, and the shortest-path machinery. Layered rather than
+/// flattened into `assign`'s argument list, and owned rather than borrowed, so
+/// a caller can build the hierarchy once and run all 24 hours through it.
+pub struct AssignPlan {
+    pub params: AssignParams,
+    pub loader: Loader,
+}
+
+impl Default for AssignPlan {
+    fn default() -> Self {
+        Self {
+            params: AssignParams::default(),
+            loader: Loader::Dijkstra,
+        }
+    }
+}
+
+impl AssignPlan {
+    pub fn new(loader: Loader) -> Self {
+        Self {
+            loader,
+            ..Self::default()
+        }
+    }
+
+    pub fn with_params(self, params: AssignParams) -> Self {
+        Self { params, ..self }
+    }
+}
+
 /// Static user-equilibrium assignment for one hour.
 ///
 /// `warm` is the previous hour's volumes. It is used only to price the first
@@ -450,8 +549,14 @@ pub fn assign(
     demand: &DemandSchema<'_>,
     hour: Hour,
     warm: Option<&[f32]>,
-    params: &AssignParams,
+    plan: &mut AssignPlan,
 ) -> HourResult {
+    let params = &plan.params;
+    // A hierarchy built over a different study area would silently answer with
+    // the wrong graph; fall back rather than mislead.
+    if !plan.loader.fits(view) {
+        plan.loader = Loader::Dijkstra;
+    }
     let e = view.edge_count();
     let attrs = view.attrs_all();
     let topo = Topology::of(view);
@@ -465,7 +570,10 @@ pub fn assign(
         Some(w) if w.len() == e => w,
         _ => &zero,
     };
-    let mut x = all_or_nothing(&topo, &priced(seed), &origins);
+    let params = plan.params;
+    let params = &params;
+    let loader = &mut plan.loader;
+    let mut x = all_or_nothing(&topo, &priced(seed), &origins, loader);
     // Most recent descent targets, newest first; two are enough for BFW.
     let mut prev: Vec<Vec<f32>> = Vec::new();
     let mut rel_gap = f32::INFINITY;
@@ -474,7 +582,7 @@ pub fn assign(
     for _ in 0..params.max_iters {
         iterations += 1;
         let cost = priced(&x);
-        let aon = all_or_nothing(&topo, &cost, &origins);
+        let aon = all_or_nothing(&topo, &cost, &origins, loader);
 
         let total: f64 = cost
             .iter()

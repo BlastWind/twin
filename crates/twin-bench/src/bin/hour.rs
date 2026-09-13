@@ -8,7 +8,7 @@
 //! in `benches/` is the regression gate.
 
 use std::time::Instant;
-use twin_core::assign::{assign, AssignParams};
+use twin_core::assign::{assign, AssignPlan, Loader};
 use twin_core::demand::DemandSchema;
 use twin_core::graph_schema::GraphChunkSchema;
 use twin_core::schema::AlignedBytes;
@@ -74,6 +74,28 @@ fn main() {
         demand.od.len()
     );
 
+    // `hour dijkstra` forces the old per-origin Dijkstra loading; the default is
+    // the CCH sweep, restricted from the pipeline's county-wide order.
+    let want_cch = std::env::args().nth(2).as_deref() != Some("dijkstra");
+    let t = Instant::now();
+    let mut plan = match want_cch {
+        false => AssignPlan::default(),
+        true => {
+            let order_bytes =
+                AlignedBytes::adopt(std::fs::read(out.join("cch_order.bin")).expect("cch_order"));
+            let order = CchOrderSchema::decode(&order_bytes).expect("order decodes");
+            AssignPlan::new(Loader::cch(&view, &restrict_order(&view, order.rank)))
+        }
+    };
+    println!(
+        "loader {} | build {:.0} ms",
+        match want_cch {
+            true => "cch",
+            false => "dijkstra",
+        },
+        t.elapsed().as_secs_f64() * 1e3
+    );
+
     let mut warm: Option<Vec<f32>> = None;
     for hour in [
         Hour::from_index(8),
@@ -81,13 +103,7 @@ fn main() {
         Hour::from_index(17),
     ] {
         let t = Instant::now();
-        let r = assign(
-            &view,
-            &demand,
-            hour,
-            warm.as_deref(),
-            &AssignParams::default(),
-        );
+        let r = assign(&view, &demand, hour, warm.as_deref(), &mut plan);
         println!(
             "hour {:>2}  {:>7.0} ms  {} iters  gap {:.2e}  vmt {:.0}  vht {:.0}  mean delay {:.1} s",
             hour.raw(),

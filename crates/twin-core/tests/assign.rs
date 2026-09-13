@@ -1,7 +1,7 @@
 //! Equilibrium tests on networks whose answer is known independently of the
 //! solver: a two-route split solved by 1-D bisection, and Braess's paradox.
 
-use twin_core::assign::{assign, AssignParams};
+use twin_core::assign::{assign, AssignParams, AssignPlan, Loader};
 use twin_core::demand::{return_share, DemandMetaSchema, DemandSchema, OdTripleSchema};
 use twin_core::graph_schema::GraphChunkSchema;
 use twin_core::schema::AlignedBytes;
@@ -91,6 +91,40 @@ fn net(node_count: u32, edges: Vec<RawEdge>, od: &[(u32, u32, f32)]) -> Net {
     }
 }
 
+/// A contraction order over a view's dense nodes, for the CCH loader.
+fn order_for(view: &ScenarioView<'_>) -> Vec<u32> {
+    let g = view.graph();
+    let (lon, lat): (Vec<f32>, Vec<f32>) = g.nodes().iter().map(|n| (n.lon, n.lat)).unzip();
+    let (tail, head): (Vec<u32>, Vec<u32>) = g.edges().iter().map(|e| (e.from, e.to)).unzip();
+    nested_dissection_order(g.nodes().len() as u32, &tail, &head, &lat, &lon)
+}
+
+/// Run the hour under both loaders and insist they agree before returning.
+///
+/// Dijkstra trees and CCH sweeps are two ways to compute the same
+/// all-or-nothing loading, so every equilibrium assertion in this file is also
+/// an equivalence test between them.
+fn both_loaders(
+    view: &ScenarioView<'_>,
+    demand: &DemandSchema<'_>,
+    hour: Hour,
+    params: AssignParams,
+) -> HourResult {
+    let order = order_for(view);
+    let mut dijkstra = AssignPlan::default().with_params(params);
+    let mut cch = AssignPlan::new(Loader::cch(view, &order)).with_params(params);
+    let a = assign(view, demand, hour, None, &mut dijkstra);
+    let b = assign(view, demand, hour, None, &mut cch);
+    for (i, (x, y)) in a.volume.iter().zip(&b.volume).enumerate() {
+        let tol = 1e-3 * x.abs().max(1.0);
+        assert!(
+            (x - y).abs() <= tol,
+            "loaders disagree on edge {i}: dijkstra {x} vs cch {y}"
+        );
+    }
+    b
+}
+
 /// Volumes keyed by the `(from, to)` node pair, which is how the tests name
 /// links. Parallel links are summed, so the two-route test names them by their
 /// distinct endpoints instead.
@@ -113,7 +147,7 @@ fn run(net: &mut Net, scenario: &Scenario, hour: Hour) -> (Vec<f32>, Vec<(u32, u
         })
         .collect();
     let demand = DemandSchema::decode(&net.demand_bytes).expect("demand decodes");
-    let out = assign(&view, &demand, hour, None, &params);
+    let out = both_loaders(&view, &demand, hour, params);
     (out.volume.clone(), pairs, out)
 }
 
@@ -130,7 +164,7 @@ fn run_default(net: &mut Net, hour: Hour) -> (Vec<f32>, Vec<(u32, u32)>, HourRes
         })
         .collect();
     let demand = DemandSchema::decode(&net.demand_bytes).expect("demand decodes");
-    let out = assign(&view, &demand, hour, None, &AssignParams::default());
+    let out = both_loaders(&view, &demand, hour, AssignParams::default());
     (out.volume.clone(), pairs, out)
 }
 
