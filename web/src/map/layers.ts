@@ -96,7 +96,8 @@ const roadColor = () =>
 export const LAYER_REGISTRY: readonly LayerEntry[] = [
   {
     id: 'roads',
-    sourceLayer: 'roads',
+    // openmaptiles/Planetiler names this MVT layer `transportation`.
+    sourceLayer: 'transportation',
     minzoom: 0,
     available: true,
     visibleByDefault: true,
@@ -110,7 +111,7 @@ export const LAYER_REGISTRY: readonly LayerEntry[] = [
   },
   {
     id: 'buildings',
-    sourceLayer: 'buildings',
+    sourceLayer: 'building',
     minzoom: 13,
     available: true,
     visibleByDefault: true,
