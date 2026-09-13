@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { mark } from '../perf'
+import { gauge, mark } from '../perf'
 import { onMap, type MapHandle } from '../map/mapRef'
 import { useSimStore, useUiStore, useWorldStore, type ViewMode } from '../state/stores'
 import { diffVc, type EdgeOrder } from '../state/resultCache'
@@ -127,9 +127,10 @@ export const ResultOverlay = () => {
   useEffect(() => {
     const overlay = overlayRef.current
     if (!overlay || !deck) return
+    gauge('overlayPaths', model.pathCount)
     if (model.pathCount === 0) return overlay.setProps({ layers: [] })
     const onHover = (index: number, x: number, y: number) =>
-      setHover(index < 0 ? null : { edge: model.edges[index] as EdgeId, classByte: model.classes[index], x, y })
+      setHover(index < 0 ? null : { edge: model.edges[index] as EdgeId, classByte: model.classes[index] ?? 9, x, y })
     overlay.setProps({ layers: [new deck.PathLayer(layerProps(model, colors, onHover, select))] })
   }, [deck, model, colors, hour, setHover, select])
 

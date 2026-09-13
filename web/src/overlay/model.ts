@@ -48,9 +48,9 @@ export const buildModel = (
     let paths = 0
     let verts = 0
     for (let i = 0; i < g.edges.length; i += 1) {
-      if (!keep(g.classes[i], majorOnly)) continue
+      if (!keep(g.classes[i]!, majorOnly)) continue
       paths += 1
-      verts += g.startIndices[i + 1] - g.startIndices[i]
+      verts += g.startIndices[i + 1]! - g.startIndices[i]!
     }
     return { paths, verts }
   })
@@ -66,13 +66,13 @@ export const buildModel = (
   let v = 0
   chunks.forEach((g) => {
     for (let i = 0; i < g.edges.length; i += 1) {
-      if (!keep(g.classes[i], majorOnly)) continue
-      const a = g.startIndices[i]
-      const b = g.startIndices[i + 1]
+      if (!keep(g.classes[i]!, majorOnly)) continue
+      const a = g.startIndices[i]!
+      const b = g.startIndices[i + 1]!
       positions.set(g.positions.subarray(a * 2, b * 2), v * 2)
       startIndices[p] = v
-      edges[p] = g.edges[i]
-      classes[p] = g.classes[i]
+      edges[p] = g.edges[i]!
+      classes[p] = g.classes[i]!
       p += 1
       v += b - a
     }
@@ -107,11 +107,11 @@ const DIFF_RAMP: readonly { readonly at: number; readonly rgb: Rgb }[] = [
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t
 
 const sample = (ramp: readonly { readonly at: number; readonly rgb: Rgb }[], x: number): Rgb => {
-  if (x <= ramp[0].at) return ramp[0].rgb
+  if (x <= ramp[0]!.at) return ramp[0]!.rgb
   const hit = ramp.findIndex((s) => x <= s.at)
-  if (hit <= 0) return ramp[ramp.length - 1].rgb
-  const lo = ramp[hit - 1]
-  const hi = ramp[hit]
+  if (hit <= 0) return ramp[ramp.length - 1]!.rgb
+  const lo = ramp[hit - 1]!
+  const hi = ramp[hit]!
   const t = (x - lo.at) / (hi.at - lo.at)
   return [
     Math.round(lerp(lo.rgb[0], hi.rgb[0], t)),
@@ -140,8 +140,8 @@ export const buildColors = (
   for (let p = 0; p < model.pathCount; p += 1) {
     const ix = order.indexOf.get(model.edges[p] as EdgeId)
     const rgb =
-      ix === undefined || ix >= values.length ? UNKNOWN : signed ? diffColor(values[ix]) : vcColor(values[ix])
-    for (let v = model.startIndices[p]; v < model.startIndices[p + 1]; v += 1) {
+      ix === undefined || ix >= values.length ? UNKNOWN : signed ? diffColor(values[ix]!) : vcColor(values[ix]!)
+    for (let v = model.startIndices[p]!; v < model.startIndices[p + 1]!; v += 1) {
       colors[v * 3] = rgb[0]
       colors[v * 3 + 1] = rgb[1]
       colors[v * 3 + 2] = rgb[2]
@@ -151,4 +151,4 @@ export const buildColors = (
 }
 
 /** Per-path metric lookup for the hover tooltip. */
-export const pathClass = (model: PathModel, path: number): RoadClass => roadClass(model.classes[path])
+export const pathClass = (model: PathModel, path: number): RoadClass => roadClass(model.classes[path] ?? 9)

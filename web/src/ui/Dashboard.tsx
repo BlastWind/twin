@@ -31,8 +31,8 @@ const edgeCenter = (
   for (const g of geometry.values()) {
     const i = g.edges.indexOf(edge)
     if (i < 0) continue
-    const mid = Math.floor((g.startIndices[i] + g.startIndices[i + 1]) / 2)
-    return [g.positions[mid * 2], g.positions[mid * 2 + 1]]
+    const mid = Math.floor((g.startIndices[i]! + g.startIndices[i + 1]!) / 2)
+    return [g.positions[mid * 2]!, g.positions[mid * 2 + 1]!]
   }
   return null
 }
