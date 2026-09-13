@@ -112,7 +112,8 @@ arcgis_dump() {
     local out
     out="$(printf '%s/page_%05d.geojson' "$dir" "$page")"
     if [[ ! -s "$out" ]]; then
-      local args=(-sS -m 300 -G "$url/query"
+      local args=(-sS -m 300 --connect-timeout 20
+        --retry 5 --retry-delay 5 --retry-all-errors -G "$url/query"
         --data-urlencode "where=$where"
         --data-urlencode "outFields=*"
         --data-urlencode "outSR=4326"
@@ -143,6 +144,19 @@ arcgis_dump() {
   printf '\r  %-16s %7d features\n' "$name" "$total" >&2
 }
 
+# A layer can lose its connection halfway through a few hundred pages; the
+# resume check means a retry costs only the pages that are missing.
+arcgis_layer() {
+  for attempt in 1 2 3 4 5; do
+    if arcgis_dump "$@"; then
+      return 0
+    fi
+    echo "retry   $1 (attempt $attempt)" >&2
+    sleep 10
+  done
+  return 1
+}
+
 # Features in one page file; -1 when the server returned an error document.
 feature_count() {
   python3 -c "import json,sys
@@ -155,12 +169,12 @@ print(-1 if 'error' in d else len(d.get('features', [])))" "$1" 2>/dev/null || e
 
 if [[ "${TWIN_SKIP_GIS:-0}" != "1" ]]; then
   echo "arcgis  Fairfax County GIS + VDOT -> $GIS_DIR"
-  arcgis_dump buildings     "$BUILDINGS_URL"     "1=1" || true
-  arcgis_dump parcels       "$PARCELS_URL"       "1=1" || true
-  arcgis_dump parcel_values "$PARCEL_VALUES_URL" "1=1" no || true
-  arcgis_dump zoning        "$ZONING_URL"        "1=1" || true
-  arcgis_dump counts        "$COUNTS_URL"        "1=1" || true
-  arcgis_dump crashes       "$CRASHES_URL"       "CRASH_YEAR >= $CRASH_YEAR_MIN" || true
+  arcgis_layer buildings     "$BUILDINGS_URL"     "1=1" || true
+  arcgis_layer parcels       "$PARCELS_URL"       "1=1" || true
+  arcgis_layer parcel_values "$PARCEL_VALUES_URL" "1=1" no || true
+  arcgis_layer zoning        "$ZONING_URL"        "1=1" || true
+  arcgis_layer counts        "$COUNTS_URL"        "1=1" || true
+  arcgis_layer crashes       "$CRASHES_URL"       "CRASH_YEAR >= $CRASH_YEAR_MIN" || true
 fi
 
 # --- GTFS -------------------------------------------------------------------
