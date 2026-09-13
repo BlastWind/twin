@@ -1,7 +1,20 @@
 import type { LayerSpecification, StyleSpecification } from 'maplibre-gl'
 
 /** Magic-type aliases: keep ids and zooms from degrading into bare strings/numbers. */
-export type LayerId = 'buildings' | 'roads' | 'parcels' | 'zoning'
+export type LayerId =
+  | 'roads'
+  | 'buildings'
+  | 'parcels'
+  | 'zoning'
+  | 'transit_routes'
+  | 'transit_stops'
+  | 'crashes'
+  | 'crash_grid'
+  | 'counts'
+
+/** Layer panel sections (DESIGN 7.4). Order here is the order on screen. */
+export type LayerGroup = 'Base' | 'Land use' | 'Transit' | 'Feeds'
+export const LAYER_GROUPS: readonly LayerGroup[] = ['Base', 'Land use', 'Transit', 'Feeds']
 export type SourceLayerName = string & { readonly __brand?: 'SourceLayerName' }
 export type Zoom = number & { readonly __brand?: 'Zoom' }
 export type SourceId = 'world'
@@ -24,10 +37,14 @@ export type LayerStyle = OmitUnion<LayerSpecification, 'id' | 'source' | 'source
 /** A registry entry is the single source of truth for one map layer. */
 export type LayerEntry = {
   readonly id: LayerId
+  readonly group: LayerGroup
   readonly sourceLayer: SourceLayerName
   readonly minzoom: Zoom
   readonly maxzoom?: Zoom
-  /** false while the pipeline does not yet emit this source layer. */
+  /**
+   * Resolved at runtime from the tiles' own `vector_layers` metadata — see
+   * `withAvailability`. The literal here is only the pre-probe default.
+   */
   readonly available: boolean
   /** initial visibility when available */
   readonly visibleByDefault: boolean
@@ -43,8 +60,10 @@ export type LayerEntry = {
  */
 const HEIGHT_M = [
   'coalesce',
-  ['get', 'render_height'],
+  // county GIS `height` (metres) is authoritative in Phase 3; the OSM-derived
+  // render_height / levels chain stays as the fallback for anything it misses.
   ['to-number', ['get', 'height'], 0],
+  ['get', 'render_height'],
   ['*', ['to-number', ['get', 'building:levels'], 0], 3.5],
   6,
 ] as unknown as never
@@ -89,6 +108,7 @@ const roadColor = () =>
 export const LAYER_REGISTRY: readonly LayerEntry[] = [
   {
     id: 'roads',
+    group: 'Base',
     // openmaptiles/Planetiler names this MVT layer `transportation`.
     sourceLayer: 'transportation',
     minzoom: 0,
@@ -104,6 +124,7 @@ export const LAYER_REGISTRY: readonly LayerEntry[] = [
   },
   {
     id: 'buildings',
+    group: 'Base',
     sourceLayer: 'building',
     minzoom: 13,
     available: true,
@@ -121,11 +142,12 @@ export const LAYER_REGISTRY: readonly LayerEntry[] = [
   },
   {
     id: 'parcels',
+    group: 'Land use',
     sourceLayer: 'parcels',
     minzoom: 14,
     available: false,
     visibleByDefault: false,
-    label: 'Parcels (pending tiles)',
+    label: 'Parcels',
     style: {
       type: 'line',
       paint: { 'line-color': '#6b7a90', 'line-width': 0.5, 'line-opacity': 0.6 },
@@ -133,14 +155,102 @@ export const LAYER_REGISTRY: readonly LayerEntry[] = [
   },
   {
     id: 'zoning',
+    group: 'Land use',
     sourceLayer: 'zoning',
     minzoom: 12,
     available: false,
     visibleByDefault: false,
-    label: 'Zoning (pending tiles)',
+    label: 'Zoning',
     style: {
       type: 'fill',
-      paint: { 'fill-color': '#4d7c5a', 'fill-opacity': 0.25 },
+      paint: { 'fill-color': zoneColor(), 'fill-opacity': 0.35, 'fill-outline-color': '#0e1116' },
+    },
+  },
+  {
+    id: 'transit_routes',
+    group: 'Transit',
+    sourceLayer: 'transit_routes',
+    minzoom: 10,
+    available: false,
+    visibleByDefault: false,
+    label: 'Transit routes',
+    style: {
+      type: 'line',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': routeColor(), 'line-width': routeWidth(), 'line-opacity': 0.85 },
+    },
+  },
+  {
+    id: 'transit_stops',
+    group: 'Transit',
+    sourceLayer: 'transit_stops',
+    minzoom: 13,
+    available: false,
+    visibleByDefault: false,
+    label: 'Transit stops',
+    style: {
+      type: 'circle',
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 13, 2, 17, 5] as unknown as never,
+        'circle-color': '#e8eaed',
+        'circle-stroke-color': '#0e1116',
+        'circle-stroke-width': 1,
+      },
+    },
+  },
+  {
+    id: 'crash_grid',
+    group: 'Feeds',
+    sourceLayer: 'crash_grid',
+    minzoom: 0,
+    // handing over to the points at z12 (DESIGN 7.2: feed points aggregate below z13)
+    maxzoom: CRASH_POINT_ZOOM,
+    available: false,
+    visibleByDefault: false,
+    label: 'Crashes (grid)',
+    style: {
+      type: 'fill',
+      paint: { 'fill-color': crashCountColor(), 'fill-opacity': 0.55 },
+    },
+  },
+  {
+    id: 'crashes',
+    group: 'Feeds',
+    sourceLayer: 'crashes',
+    minzoom: CRASH_POINT_ZOOM,
+    available: false,
+    visibleByDefault: false,
+    label: 'Crashes',
+    style: {
+      type: 'circle',
+      paint: {
+        // severity is ordinal, so it drives size; one hue keeps it from reading
+        // as five unrelated categories
+        'circle-radius': crashRadius(),
+        'circle-color': CRASH_COLOR,
+        'circle-opacity': 0.8,
+        'circle-stroke-color': '#0e1116',
+        'circle-stroke-width': 0.5,
+      },
+    },
+  },
+  {
+    id: 'counts',
+    group: 'Feeds',
+    sourceLayer: 'counts',
+    minzoom: 9,
+    available: false,
+    visibleByDefault: false,
+    label: 'Traffic counts (AADT)',
+    style: {
+      type: 'circle',
+      paint: {
+        'circle-radius': aadtRadius(),
+        'circle-color': COUNT_COLOR,
+        'circle-opacity': 0.75,
+        'circle-stroke-color': '#0e1116',
+        'circle-stroke-width': 0.75,
+      },
     },
   },
 ]

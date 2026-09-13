@@ -234,7 +234,11 @@ pub fn isochrone(
 
     // Stops resolve to dense indices once; unloaded chunks simply have none.
     let stop_dense: Vec<Option<u32>> = (0..transit.stop_count())
-        .map(|s| transit.node_of(s as StopIdx).and_then(|id| view.index_of(id)))
+        .map(|s| {
+            transit
+                .node_of(s as StopIdx)
+                .and_then(|id| view.index_of(id))
+        })
         .collect();
 
     for _ in 0..MAX_ROUNDS {
@@ -346,7 +350,11 @@ pub fn reach_population(
     zone_dense
         .filter_map(|(z, dense)| {
             let d = dense? as usize;
-            reach.seconds.get(d)?.is_finite().then(|| zone_pop[z] as f64)
+            reach
+                .seconds
+                .get(d)?
+                .is_finite()
+                .then(|| zone_pop[z] as f64)
         })
         .sum()
 }
@@ -358,7 +366,12 @@ pub fn nearest_stop(transit: &TransitSchema<'_>, lon: f64, lat: f64) -> Option<S
         .stop_lonlat
         .iter()
         .enumerate()
-        .map(|(i, p)| (haversine_m(lon, lat, p[0] as f64, p[1] as f64), i as StopIdx))
+        .map(|(i, p)| {
+            (
+                haversine_m(lon, lat, p[0] as f64, p[1] as f64),
+                i as StopIdx,
+            )
+        })
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, i)| i)
 }
@@ -423,7 +436,7 @@ mod tests {
             }],
             &[0, 1],
             &[0.0, 0.0],
-            &vec![600.0; HOURS_PER_DAY],
+            &[600.0; HOURS_PER_DAY],
         ));
         assert!(TransitSchema::decode(&bytes).is_err());
     }
