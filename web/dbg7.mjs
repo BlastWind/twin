@@ -1,0 +1,10 @@
+import { chromium } from '@playwright/test'
+const b = await chromium.launch({ args: ['--use-gl=swiftshader','--enable-unsafe-swiftshader'] })
+const p = await b.newPage()
+const reqs=[]; p.on('request', r=>reqs.push(r.url()))
+await p.goto('http://localhost:4317/', { waitUntil: 'load' })
+await p.waitForTimeout(5000)
+console.log('reqs', reqs.filter(u=>u.includes('data/')).length, reqs.filter(u=>u.includes('data/')).slice(0,3))
+console.log('features', await p.evaluate(()=>globalThis.__twinMap.queryRenderedFeatures().length))
+await p.screenshot({path:'/tmp/shot.png'})
+await b.close()

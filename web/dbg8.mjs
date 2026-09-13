@@ -1,0 +1,13 @@
+import { chromium } from '@playwright/test'
+const b = await chromium.launch({ args: ['--use-gl=swiftshader','--enable-unsafe-swiftshader'] })
+const p = await b.newPage()
+const reqs=[]; p.on('request', r=>{ if(r.url().includes('data/')) reqs.push(r.url()) })
+p.on('console', m=>{ if(m.type()==='error') console.log('ERR', m.text().slice(0,200)) })
+await p.goto('http://localhost:4317/', { waitUntil: 'load' })
+await p.waitForTimeout(2000)
+console.log('vis', await p.evaluate(()=>globalThis.__twinMap.getStyle().layers.map(l=>[l.id,l.layout?.visibility,l.minzoom])))
+await p.evaluate(()=>globalThis.__twinMap.jumpTo({center:[-77.28,38.85],zoom:14,pitch:0}))
+await p.waitForTimeout(3000)
+console.log('reqs', reqs.length)
+console.log('feat', await p.evaluate(()=>globalThis.__twinMap.queryRenderedFeatures().length))
+await b.close()

@@ -33,6 +33,8 @@ export type LayerEntry = {
   readonly visibleByDefault: boolean
   readonly label: string
   readonly style: LayerStyle
+  /** When present, this entry expands into one MapLibre layer per group. */
+  readonly lod?: readonly LodGroup[]
 }
 
 /**
@@ -52,26 +54,17 @@ const MIN_HEIGHT_M = ['coalesce', ['get', 'render_min_height'], ['to-number', ['
 /**
  * Road zoom LOD, DESIGN 7.2: motorway/trunk/primary/secondary at all zooms,
  * tertiary from z12, residential/unclassified from z13, service from z15.
+ * `zoom` is not allowed inside a layer `filter`, so each group becomes its own
+ * MapLibre layer with a real `minzoom` — generated from this one registry entry.
  */
-const ROAD_CLASS_MINZOOM: ReadonlyArray<readonly [string, Zoom]> = [
-  ['motorway', 0],
-  ['trunk', 0],
-  ['primary', 0],
-  ['secondary', 0],
-  ['tertiary', 12],
-  ['minor', 13],
-  ['residential', 13],
-  ['unclassified', 13],
-  ['service', 15],
-]
+export type LodGroup = { readonly suffix: string; readonly minzoom: Zoom; readonly classes: readonly string[] }
 
-const roadClassFilter = () =>
-  [
-    'any',
-    ...ROAD_CLASS_MINZOOM.map(([cls, mz]) => ['all', ['==', ['get', 'class'], cls], ['>=', ['zoom'], mz]]),
-    // classes we did not enumerate: show from z14 rather than drop them.
-    ['all', ['!', ['in', ['get', 'class'], ['literal', ROAD_CLASS_MINZOOM.map(([c]) => c)]]], ['>=', ['zoom'], 14]],
-  ] as unknown as never
+const ROAD_LOD: readonly LodGroup[] = [
+  { suffix: 'major', minzoom: 0, classes: ['motorway', 'trunk', 'primary', 'secondary'] },
+  { suffix: 'tertiary', minzoom: 12, classes: ['tertiary', 'tertiary_link'] },
+  { suffix: 'minor', minzoom: 13, classes: ['minor', 'residential', 'unclassified', 'living_street'] },
+  { suffix: 'service', minzoom: 15, classes: ['service', 'track', 'path'] },
+]
 
 const roadWidth = () =>
   [
@@ -102,9 +95,9 @@ export const LAYER_REGISTRY: readonly LayerEntry[] = [
     available: true,
     visibleByDefault: true,
     label: 'Roads',
+    lod: ROAD_LOD,
     style: {
       type: 'line',
-      filter: roadClassFilter(),
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': roadColor(), 'line-width': roadWidth(), 'line-opacity': 0.9 },
     },
@@ -158,19 +151,24 @@ export const layerById = (id: LayerId): LayerEntry => {
   return found
 }
 
-const toMapLibreLayer = (entry: LayerEntry, visible: boolean): LayerSpecification =>
+const toMapLibreLayer = (entry: LayerEntry, visible: boolean, group?: LodGroup): LayerSpecification =>
   ({
     ...entry.style,
-    id: entry.id,
+    id: group ? `${entry.id}/${group.suffix}` : entry.id,
     source: WORLD_SOURCE,
     'source-layer': entry.sourceLayer,
-    minzoom: entry.minzoom,
+    minzoom: group ? group.minzoom : entry.minzoom,
     ...(entry.maxzoom === undefined ? {} : { maxzoom: entry.maxzoom }),
+    ...(group ? { filter: ['in', ['get', 'class'], ['literal', group.classes]] } : {}),
     layout: {
       ...(entry.style as { layout?: Record<string, unknown> }).layout,
       visibility: visible ? 'visible' : 'none',
     },
   }) as LayerSpecification
+
+/** Every MapLibre layer id produced by one registry entry. */
+export const mapLayerIds = (entry: LayerEntry): readonly string[] =>
+  entry.lod ? entry.lod.map((g) => `${entry.id}/${g.suffix}`) : [entry.id]
 
 export type LayerVisibility = Readonly<Record<LayerId, boolean>>
 
@@ -186,6 +184,10 @@ export const buildStyle = (visibility: LayerVisibility, pmtilesUrl = WORLD_PMTIL
   },
   layers: [
     { id: 'background', type: 'background', paint: { 'background-color': '#0e1116' } },
-    ...LAYER_REGISTRY.map((entry) => toMapLibreLayer(entry, visibility[entry.id])),
+    ...LAYER_REGISTRY.flatMap((entry) =>
+      entry.lod
+        ? entry.lod.map((g) => toMapLibreLayer(entry, visibility[entry.id], g))
+        : [toMapLibreLayer(entry, visibility[entry.id])],
+    ),
   ],
 })

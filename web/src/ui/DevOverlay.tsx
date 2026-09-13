@@ -30,7 +30,8 @@ export const DevOverlay = () => {
   const enabled = useUiStore((s) => s.devOverlay)
   const toggle = useUiStore((s) => s.toggleDevOverlay)
   const fps = useFps(enabled)
-  const world = useWorldStore((s) => ({ load: s.load, stats: s.stats }))
+  const load = useWorldStore((s) => s.load)
+  const backend = useWorldStore((s) => s.stats?.backend)
   const [, force] = useState(0)
   useEffect(() => {
     if (!enabled) return
@@ -52,8 +53,8 @@ export const DevOverlay = () => {
       <div style={line}>
         <span>worker</span>
         <span style={{ marginLeft: 'auto' }}>
-          {world.load}
-          {world.stats ? ` · ${world.stats.backend}` : ''}
+          {load}
+          {backend ? ` · ${backend}` : ''}
         </span>
       </div>
     </div>

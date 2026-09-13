@@ -9,7 +9,7 @@ fn county_bbox() -> BBox {
 }
 
 fn grid_partition(n: u32) -> Partition {
-    let raw = RawGraph::synthetic_grid(n, (-77.54, 38.60));
+    let raw = RawGraph::synthetic_grid(n, county_bbox());
     let grid = GridSchema::cover(county_bbox(), DEFAULT_CELL_M);
     partition(&raw, &grid)
 }
@@ -165,7 +165,7 @@ fn degree2_chain_collapses() {
 /// but the four corners are degree-2 and do collapse.
 #[test]
 fn degree2_leaves_a_grid_almost_alone() {
-    let raw = RawGraph::synthetic_grid(6, (-77.5, 38.7));
+    let raw = RawGraph::synthetic_grid(6, county_bbox());
     let simplified = simplify_degree2(&raw);
     assert_eq!(
         simplified.nodes.len(),

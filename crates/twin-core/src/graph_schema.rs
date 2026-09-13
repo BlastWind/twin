@@ -217,6 +217,16 @@ impl ChunkBuild {
             .count() as u32
     }
 
+    /// Edges in this file whose two endpoints sit in different cells. Each such
+    /// edge is written into both cells, so summing this over all chunks
+    /// double-counts.
+    pub fn border_edge_count(&self) -> u32 {
+        self.edges
+            .iter()
+            .filter(|e| self.nodes[e.from as usize].chunk != self.nodes[e.to as usize].chunk)
+            .count() as u32
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         let lonlat: Vec<[f32; 2]> = self.nodes.iter().map(|n| [n.lon, n.lat]).collect();
         let node_gid: Vec<u32> = self.nodes.iter().map(|n| n.gid.raw()).collect();

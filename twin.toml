@@ -1,0 +1,14 @@
+# Project defaults for twin-pipeline. Overridden by TWIN_* env vars, then by
+# CLI flags. Every key is optional; the code carries a default for each.
+
+[paths]
+raw_dir = "data/raw"
+out_dir = "data/build"
+
+[roads]
+# Fairfax County, VA.
+bbox = "-77.54,38.60,-77.04,39.06"
+cell_m = 2000.0
+simplify = true
+# Service roads roughly double the edge count for little assignment value.
+keep_service = false

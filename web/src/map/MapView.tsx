@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useUiStore } from '../state/stores'
 import { mark } from '../perf'
-import { FAIRFAX_CAMERA, LAYER_REGISTRY, buildStyle, type LayerVisibility } from './layers'
+import { FAIRFAX_CAMERA, LAYER_REGISTRY, buildStyle, mapLayerIds, type LayerVisibility } from './layers'
 
 /** MapLibre is ~200 KB gz: kept out of the shell by lazy-importing here. */
 const createMap = async (container: HTMLDivElement, visibility: LayerVisibility) => {
@@ -37,6 +37,7 @@ export const MapView = () => {
       if (disposed) return map.remove()
       mapRef.current = map as unknown as typeof mapRef.current
       map.on('style.load', () => mark('style-ready'))
+      map.on('error', (e) => console.error('[map]', e.error?.message ?? e))
       map.on('data', (e) => {
         if (e.dataType === 'source' && 'tile' in e) mark('first-tile')
       })
@@ -57,13 +58,15 @@ export const MapView = () => {
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
-    LAYER_REGISTRY.forEach((entry) => {
-      try {
-        map.setLayoutProperty(entry.id, 'visibility', layers[entry.id] ? 'visible' : 'none')
-      } catch {
-        /* style not loaded yet; initial style already encodes visibility */
-      }
-    })
+    LAYER_REGISTRY.flatMap((entry) => mapLayerIds(entry).map((id) => [id, layers[entry.id]] as const)).forEach(
+      ([id, visible]) => {
+        try {
+          map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none')
+        } catch {
+          /* style not loaded yet; the initial style already encodes visibility */
+        }
+      },
+    )
   }, [layers])
 
   return <div id="map" ref={container} />

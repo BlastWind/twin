@@ -66,17 +66,21 @@ pub struct RawGraph {
 }
 
 impl RawGraph {
-    /// An `n * n` lattice with 2 km spacing, both directions on every arc.
-    /// Used by the benches and by `--synthetic-grid` so everything is testable
-    /// without a PBF.
-    pub fn synthetic_grid(n: u32, origin: (f64, f64)) -> Self {
-        let step = 0.018_f64; // ~2 km of latitude
+    /// An `n * n` lattice spread evenly across `bbox`, both directions on every
+    /// arc, so `E = 4n(n-1)`. Used by the benches and by `--synthetic-grid` so
+    /// everything is testable without a PBF.
+    pub fn synthetic_grid(n: u32, bbox: crate::grid::BBox) -> Self {
+        let span = (n.saturating_sub(1)).max(1) as f64;
+        let (dx, dy) = (
+            (bbox.east - bbox.west) / span,
+            (bbox.north - bbox.south) / span,
+        );
         let idx = |x: u32, y: u32| y * n + x;
         let nodes = (0..n)
             .flat_map(|y| {
                 (0..n).map(move |x| RawNode {
-                    lon: origin.0 + x as f64 * step,
-                    lat: origin.1 + y as f64 * step,
+                    lon: bbox.west + x as f64 * dx,
+                    lat: bbox.south + y as f64 * dy,
                 })
             })
             .collect::<Vec<_>>();

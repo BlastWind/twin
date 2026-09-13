@@ -1,0 +1,13 @@
+import { chromium } from '@playwright/test'
+const b = await chromium.launch({ args: ['--use-gl=swiftshader','--enable-unsafe-swiftshader','--disable-dev-shm-usage'] })
+const p = await b.newPage()
+p.on('pageerror', e => console.log('PAGEERROR', e.message.slice(0,200)))
+p.on('requestfailed', r => console.log('REQFAIL', r.url(), r.failure()?.errorText))
+p.on('response', r => { if(r.url().includes('pmtiles')) console.log('HTTP', r.status(), r.headers()['content-range']||'', r.url()) })
+await p.goto('http://localhost:4317/', { waitUntil: 'load' })
+await p.waitForTimeout(1000)
+await p.evaluate(()=>{ const m=globalThis.__twinMap; globalThis.__errs=[]; m.on('error', e=>globalThis.__errs.push(String(e.error?.message||e.error||e))); })
+await p.waitForTimeout(7000)
+console.log('errs', await p.evaluate(()=>globalThis.__errs))
+console.log('loaded', await p.evaluate(()=>globalThis.__twinMap.loaded()), 'srcLoaded', await p.evaluate(()=>globalThis.__twinMap.isSourceLoaded('world')))
+await b.close()

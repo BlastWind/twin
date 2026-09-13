@@ -1,0 +1,12 @@
+import { chromium } from '@playwright/test'
+const b = await chromium.launch({ args: ['--use-gl=swiftshader','--enable-unsafe-swiftshader','--disable-dev-shm-usage'] })
+const p = await b.newPage()
+p.on('console', m => console.log('CONSOLE', m.type(), m.text().slice(0,300)))
+p.on('pageerror', e => console.log('PAGEERROR', e.message.slice(0,300)))
+p.on('response', r => { if(!r.ok()) console.log('HTTP', r.status(), r.url()) })
+await p.goto('http://localhost:4317/', { waitUntil: 'load' })
+await p.waitForTimeout(8000)
+console.log('marks', await p.evaluate(()=>globalThis.__twinMarks))
+console.log('mapReady', await p.evaluate(()=>globalThis.__twinMapReady))
+console.log('hasMap', await p.evaluate(()=>!!globalThis.__twinMap))
+await b.close()
