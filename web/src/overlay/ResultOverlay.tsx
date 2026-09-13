@@ -3,7 +3,7 @@ import { gauge, mark } from '../perf'
 import { onMap, type MapHandle } from '../map/mapRef'
 import { useSimStore, useUiStore, useWorldStore, type ViewMode } from '../state/stores'
 import { diffVc, type EdgeOrder } from '../state/resultCache'
-import { buildColors, buildModel, EMPTY_MODEL, MAJOR_ONLY_BELOW_ZOOM, type PathModel } from './model'
+import { buildColors, buildModel, EMPTY_MODEL, MAJOR_ONLY_BELOW_ZOOM, type PathModel, type ViewBounds } from './model'
 import type { EdgeId, HourResultDTO } from '../sim/protocol'
 
 /**
@@ -85,10 +85,13 @@ const useSettled = <T,>(value: T, ms: number): T => {
 
 const GEOMETRY_SETTLE_MS = 250
 
+/** Half a screen of slack, so a small pan does not immediately re-clip. */
+const VIEW_PAD = 0.5
+
 export const ResultOverlay = () => {
   const [deck, setDeck] = useState<DeckModules | null>(null)
   const [map, setMapState] = useState<MapHandle | null>(null)
-  const [zoom, setZoom] = useState(11)
+  const [camera, setCamera] = useState<{ readonly zoom: number; readonly view: ViewBounds | null }>({ zoom: 11, view: null })
   const overlayRef = useRef<{ setProps: (p: Record<string, unknown>) => void; finalize: () => void } | null>(null)
 
   const geometry = useSettled(useWorldStore((s) => s.geometry), GEOMETRY_SETTLE_MS)
@@ -110,13 +113,26 @@ export const ResultOverlay = () => {
     if (map) void loadDeck().then(setDeck)
   }, [map])
 
-  // zoom drives the class filter, so the low-zoom upload stays bounded
+  /**
+   * Two complementary bounds on the upload: below z12 only the major classes,
+   * from z12 up every class but only inside the padded viewport.
+   */
   useEffect(() => {
     if (!map) return
-    const sync = () => setZoom(map.getZoom())
+    const sync = () => {
+      const zoom = map.getZoom()
+      if (zoom < MAJOR_ONLY_BELOW_ZOOM) return setCamera({ zoom, view: null })
+      const b = map.getBounds()
+      const padLon = (b.getEast() - b.getWest()) * VIEW_PAD
+      const padLat = (b.getNorth() - b.getSouth()) * VIEW_PAD
+      setCamera({
+        zoom,
+        view: [b.getWest() - padLon, b.getSouth() - padLat, b.getEast() + padLon, b.getNorth() + padLat],
+      })
+    }
     sync()
-    map.on('zoomend', sync as (e: never) => void)
-    return () => map.off('zoomend', sync as (e: never) => void)
+    map.on('moveend', sync as (e: never) => void)
+    return () => map.off('moveend', sync as (e: never) => void)
   }, [map])
 
   useEffect(() => {
@@ -132,8 +148,11 @@ export const ResultOverlay = () => {
     }
   }, [map, deck])
 
-  const majorOnly = zoom < MAJOR_ONLY_BELOW_ZOOM
-  const model = useMemo(() => (enabled ? buildModel(geometry, majorOnly) : EMPTY_MODEL), [geometry, majorOnly, enabled])
+  const majorOnly = camera.zoom < MAJOR_ONLY_BELOW_ZOOM
+  const model = useMemo(
+    () => (enabled ? buildModel(geometry, majorOnly, camera.view) : EMPTY_MODEL),
+    [geometry, majorOnly, camera.view, enabled],
+  )
 
   const colors = useMemo(() => {
     const { values, signed } = valuesFor(mode, baseline, scenarioResult)

@@ -11,6 +11,13 @@ import type { EdgeOrder } from '../state/resultCache'
 /** Below this zoom only motorway/trunk/primary/secondary are drawn. */
 export const MAJOR_ONLY_BELOW_ZOOM = 12
 
+/**
+ * At and above that zoom every class is drawn, so the county-wide set has to be
+ * clipped to what is on screen instead (DESIGN 7.2). `[w, s, e, n]`, already
+ * padded by the caller.
+ */
+export type ViewBounds = readonly [number, number, number, number]
+
 export type PathModel = {
   /** flat `[lon, lat, …]`, `2V` long */
   readonly positions: Float32Array
@@ -33,7 +40,17 @@ export const EMPTY_MODEL: PathModel = {
   vertexCount: 0,
 }
 
-const keep = (classByte: number, majorOnly: boolean): boolean => !majorOnly || MAJOR_CLASS_BYTES.has(classByte)
+const inView = (g: ChunkGeometryDTO, i: number, view: ViewBounds | null): boolean => {
+  if (!view) return true
+  // one representative point per path: exact enough at these path lengths
+  const v = g.startIndices[i]! * 2
+  const lon = g.positions[v]!
+  const lat = g.positions[v + 1]!
+  return lon >= view[0] && lon <= view[2] && lat >= view[1] && lat <= view[3]
+}
+
+const keep = (g: ChunkGeometryDTO, i: number, majorOnly: boolean, view: ViewBounds | null): boolean =>
+  (!majorOnly || MAJOR_CLASS_BYTES.has(g.classes[i]!)) && inView(g, i, view)
 
 /**
  * Merge the resident chunks into one binary path set. Chunks are visited in a
@@ -42,13 +59,14 @@ const keep = (classByte: number, majorOnly: boolean): boolean => !majorOnly || M
 export const buildModel = (
   geometry: ReadonlyMap<ChunkKey, ChunkGeometryDTO>,
   majorOnly: boolean,
+  view: ViewBounds | null = null,
 ): PathModel => {
   const chunks = [...geometry.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, g]) => g)
   const sizes = chunks.map((g) => {
     let paths = 0
     let verts = 0
     for (let i = 0; i < g.edges.length; i += 1) {
-      if (!keep(g.classes[i]!, majorOnly)) continue
+      if (!keep(g, i, majorOnly, view)) continue
       paths += 1
       verts += g.startIndices[i + 1]! - g.startIndices[i]!
     }
@@ -66,7 +84,7 @@ export const buildModel = (
   let v = 0
   chunks.forEach((g) => {
     for (let i = 0; i < g.edges.length; i += 1) {
-      if (!keep(g.classes[i]!, majorOnly)) continue
+      if (!keep(g, i, majorOnly, view)) continue
       const a = g.startIndices[i]!
       const b = g.startIndices[i + 1]!
       positions.set(g.positions.subarray(a * 2, b * 2), v * 2)

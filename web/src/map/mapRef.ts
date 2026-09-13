@@ -11,6 +11,7 @@ export type MapHandle = {
   getCanvas: () => HTMLCanvasElement
   getContainer: () => HTMLElement
   getZoom: () => number
+  getBounds: () => { getWest: () => number; getSouth: () => number; getEast: () => number; getNorth: () => number }
   unproject: (p: [number, number]) => { lng: number; lat: number }
   project: (ll: [number, number]) => { x: number; y: number }
   flyTo: (o: { center: [number, number]; zoom?: number; duration?: number }) => void
