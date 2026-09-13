@@ -1,0 +1,7 @@
+/target
+**/target
+/data
+Cargo.lock.orig
+crates/twin-wasm/pkg
+*.osm.pbf
+.DS_Store

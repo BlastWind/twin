@@ -1,0 +1,10 @@
+[package]
+name = "twin-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure graph + binary-schema core for the twin digital-twin project. No I/O."
+
+[dependencies]
+bytemuck = { workspace = true }
+thiserror = { workspace = true }
