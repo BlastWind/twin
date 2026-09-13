@@ -5,6 +5,7 @@ import { LayerPanel } from './LayerPanel'
 import { DevOverlay } from './DevOverlay'
 import { HourScrubber } from './HourScrubber'
 import { EdgeTooltip } from './EdgeTooltip'
+import { ParcelPopup } from './ParcelPopup'
 import { ScenarioEditor } from './ScenarioEditor'
 import { ReachTool } from './ReachTool'
 import { TransitEditor } from './TransitEditor'
@@ -45,6 +46,7 @@ export const App = () => {
       </div>
       <HourScrubber />
       <EdgeTooltip />
+      <ParcelPopup />
       <DevOverlay />
       {error && <div className="toast">{error.code}: {error.message}</div>}
     </>

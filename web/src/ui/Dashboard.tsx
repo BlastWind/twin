@@ -1,7 +1,11 @@
-import { getMap } from '../map/mapRef'
+import { useEffect, useState } from 'react'
+import { flyToEdge } from '../map/edgeCenter'
 import type { EdgeId, KpiDTO } from '../sim/protocol'
 import { useSimStore, useUiStore, useWorldStore } from '../state/stores'
-import { kpiDelta } from '../state/resultCache'
+import { isComplete, kpiDelta } from '../state/resultCache'
+import { getSimClient } from '../sim/client'
+import { CalibrationChart } from './CalibrationChart'
+import { CrashSummary, LandUseSummary } from './ViewportPanels'
 
 /** KPI cards (baseline vs scenario) and the top-10 congested corridors. */
 
@@ -23,20 +27,6 @@ const fmt = (n: number | undefined, digits: number): string =>
 
 const signed = (n: number, digits: number): string => `${n > 0 ? '+' : ''}${fmt(n, digits)}`
 
-/** Centroid of an edge's polyline, for the fly-to. */
-const edgeCenter = (
-  geometry: ReadonlyMap<string, { edges: Uint32Array; positions: Float32Array; startIndices: Uint32Array }>,
-  edge: EdgeId,
-): [number, number] | null => {
-  for (const g of geometry.values()) {
-    const i = g.edges.indexOf(edge)
-    if (i < 0) continue
-    const mid = Math.floor((g.startIndices[i]! + g.startIndices[i + 1]!) / 2)
-    return [g.positions[mid * 2]!, g.positions[mid * 2 + 1]!]
-  }
-  return null
-}
-
 const Cards = ({ base, scen }: { base: KpiDTO | undefined; scen: KpiDTO | undefined }) => {
   const delta = kpiDelta(base, scen)
   return (
@@ -57,21 +47,38 @@ const Cards = ({ base, scen }: { base: KpiDTO | undefined; scen: KpiDTO | undefi
   )
 }
 
+/** Four questions, one panel: the traffic result, then the three Phase-3 feeds. */
+const TABS = ['Traffic', 'Calibration', 'Crashes', 'Land use'] as const
+type Tab = (typeof TABS)[number]
+
+/**
+ * Calibration compares against *daily* volume, so it is only meaningful once
+ * the background sweep has all 24 hours; asking earlier would score the model
+ * against a partial day.
+ */
+const useCalibration = (): void => {
+  const complete = useSimStore((s) => isComplete(s.baseline))
+  useEffect(() => {
+    if (complete) getSimClient()?.calibration()
+  }, [complete])
+}
+
 export const Dashboard = () => {
+  const [tab, setTab] = useState<Tab>('Traffic')
   const h = useUiStore((s) => s.hour)
   const select = useUiStore((s) => s.select)
   const baseline = useSimStore((s) => s.baseline[h])
   const scenario = useSimStore((s) => s.scenario[h])
   const geometry = useWorldStore((s) => s.geometry)
   const stats = useWorldStore((s) => s.stats)
+  useCalibration()
 
   const shown = scenario?.kpis ?? baseline?.kpis
   const top = (shown?.topEdges ?? []).slice(0, 10)
 
   const flyTo = (edge: EdgeId): void => {
     select(edge)
-    const center = edgeCenter(geometry as never, edge)
-    if (center) getMap()?.flyTo({ center, zoom: 15, duration: 900 })
+    flyToEdge(geometry, edge)
   }
 
   return (
@@ -79,6 +86,18 @@ export const Dashboard = () => {
       <h2>
         Dashboard <span className="sub">{stats ? `${stats.backend} · ${stats.edges.toLocaleString()} edges` : 'loading…'}</span>
       </h2>
+      <div className="row tabs">
+        {TABS.map((t) => (
+          <button key={t} className={t === tab ? 'on' : ''} onClick={() => setTab(t)}>
+            {t}
+          </button>
+        ))}
+      </div>
+      {tab === 'Calibration' && <CalibrationChart />}
+      {tab === 'Crashes' && <CrashSummary />}
+      {tab === 'Land use' && <LandUseSummary />}
+      {tab !== 'Traffic' ? null : (
+      <>
       <Cards base={baseline?.kpis} scen={scenario?.kpis} />
       <table className="top-edges">
         <thead>
@@ -105,6 +124,8 @@ export const Dashboard = () => {
           )}
         </tbody>
       </table>
+      </>
+      )}
     </div>
   )
 }

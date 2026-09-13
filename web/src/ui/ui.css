@@ -183,3 +183,23 @@ button.on { border-color: #3987e5; color: #cde2fb; }
 .stop-list li { display: flex; gap: 6px; font-size: 11px; color: #9aa4b2; padding: 1px 0; }
 .chart { width: 100%; display: block; }
 .chart-note { font-size: 11px; color: #6c7686; margin: 2px 0 6px; }
+
+.parcel-popup {
+  position: absolute;
+  z-index: 6;
+  min-width: 190px;
+  padding: 8px 10px;
+  border: 1px solid #242b36;
+  border-radius: 6px;
+  background: rgba(14, 17, 22, 0.94);
+  font-size: 11px;
+  color: #cfd6e0;
+  pointer-events: auto;
+}
+.parcel-head { display: flex; align-items: center; gap: 6px; font-weight: 600; margin-bottom: 4px; }
+.parcel-head .link { margin-left: auto; }
+.parcel-popup dl { display: grid; grid-template-columns: auto 1fr; gap: 1px 8px; margin: 0; }
+.parcel-popup dt { color: #6c7686; }
+.parcel-popup dd { margin: 0; text-align: right; }
+
+.tabs button { font-size: 11px; padding: 2px 7px; }

@@ -15,6 +15,10 @@ export type MapHandle = {
   unproject: (p: [number, number]) => { lng: number; lat: number }
   project: (ll: [number, number]) => { x: number; y: number }
   flyTo: (o: { center: [number, number]; zoom?: number; duration?: number }) => void
+  queryRenderedFeatures: (
+    geometry?: unknown,
+    options?: { layers?: string[] },
+  ) => readonly { properties: Readonly<Record<string, unknown>> }[]
   addControl: (c: unknown) => void
   removeControl: (c: unknown) => void
   on: (event: string, fn: (e: never) => void) => void

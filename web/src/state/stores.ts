@@ -27,6 +27,7 @@ import { EMPTY_SCENARIO } from '../sim/protocol'
 import type { ManifestDTO, StudyArea } from '../graph/manifest'
 import { DEFAULT_STUDY_AREA } from '../graph/manifest'
 import type { ChunkEntrySchema } from '../graph/schema'
+import type { ParcelDTO } from '../map/viewportQuery'
 import { EMPTY_CACHE, EMPTY_ORDER, edgeOrder, putHour, type EdgeOrder, type ResultCache } from './resultCache'
 
 /** DESIGN 7.3 — four stores, one concern each. */
@@ -167,6 +168,8 @@ export type UiState = {
   readonly tool: MapTool
   readonly hover: HoverInfo | null
   readonly selected: EdgeId | null
+  /** the parcel under the last click, with the screen point to anchor its card */
+  readonly parcel: { readonly parcel: ParcelDTO; readonly x: number; readonly y: number } | null
   setHour: (hour: Hour) => void
   setPlaying: (playing: boolean) => void
   setMode: (mode: ViewMode) => void
@@ -179,6 +182,7 @@ export type UiState = {
   setTool: (tool: MapTool) => void
   setHover: (hover: HoverInfo | null) => void
   select: (edge: EdgeId | null) => void
+  selectParcel: (parcel: { readonly parcel: ParcelDTO; readonly x: number; readonly y: number } | null) => void
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -194,6 +198,7 @@ export const useUiStore = create<UiState>((set) => ({
   tool: 'select',
   hover: null,
   selected: null,
+  parcel: null,
   setHour: (hour) => set({ hour }),
   setPlaying: (playing) => set({ playing }),
   setMode: (mode) => set({ mode }),
@@ -212,6 +217,7 @@ export const useUiStore = create<UiState>((set) => ({
   setTool: (tool) => set({ tool }),
   setHover: (hover) => set({ hover }),
   select: (selected) => set({ selected, hover: null }),
+  selectParcel: (parcel) => set({ parcel }),
 }))
 
 // --------------------------------------------------------------------- reach
