@@ -69,13 +69,29 @@ const layerProps = (
   },
 })
 
+/**
+ * Chunk geometry arrives one message per chunk — 469 of them for the whole
+ * county. Rebuilding the merged model on each would be quadratic, so coalesce
+ * the burst and rebuild on a trailing edge.
+ */
+const useSettled = <T,>(value: T, ms: number): T => {
+  const [settled, setSettled] = useState(value)
+  useEffect(() => {
+    const t = setTimeout(() => setSettled(value), ms)
+    return () => clearTimeout(t)
+  }, [value, ms])
+  return settled
+}
+
+const GEOMETRY_SETTLE_MS = 250
+
 export const ResultOverlay = () => {
   const [deck, setDeck] = useState<DeckModules | null>(null)
   const [map, setMapState] = useState<MapHandle | null>(null)
   const [zoom, setZoom] = useState(11)
   const overlayRef = useRef<{ setProps: (p: Record<string, unknown>) => void; finalize: () => void } | null>(null)
 
-  const geometry = useWorldStore((s) => s.geometry)
+  const geometry = useSettled(useWorldStore((s) => s.geometry), GEOMETRY_SETTLE_MS)
   const order: EdgeOrder = useWorldStore((s) => s.order)
   // one selector per field: zustand v5 compares snapshots by identity, so an
   // object literal selector would re-render forever

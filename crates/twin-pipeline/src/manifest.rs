@@ -2,11 +2,13 @@
 //! binary, so this stays small and is the single place schema versions, byte
 //! sizes and content hashes are pinned.
 
-use serde::Serialize;
-use twin_core::schema::{VERSION_CHUNK, VERSION_INDEX};
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+use twin_core::schema::{VERSION_CCH_ORDER, VERSION_CHUNK, VERSION_DEMAND, VERSION_INDEX};
 use twin_core::{BBox, GridSchema};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManifestDTO {
     pub manifest_version: u32,
     pub schema: SchemaVersionsDTO,
@@ -15,12 +17,73 @@ pub struct ManifestDTO {
     pub counts: CountsDTO,
     pub stages: Vec<StageDTO>,
     pub files: Vec<FileDTO>,
+    /// Present once the `demand` stage has run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demand: Option<DemandInfoDTO>,
+    /// Present once the `cch-order` stage has run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cch_order: Option<CchOrderInfoDTO>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DemandInfoDTO {
+    pub zone_count: u32,
+    /// First external zone; zones below it are census block groups.
+    pub external_zone_start: u32,
+    pub od_count: u32,
+    /// True when no LODES data was read and the flows are a gravity model.
+    pub is_synthetic: bool,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CchOrderInfoDTO {
+    pub node_count: u32,
+    pub kind: String,
+}
+
+impl ManifestDTO {
+    /// Read the manifest a previous stage wrote, so a later stage adds to it
+    /// instead of clobbering it.
+    pub fn load(path: &Path) -> Result<Self> {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("reading {} — run `ingest-roads` first", path.display()))?;
+        serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+    }
+
+    pub fn write(&self, path: &Path) -> Result<()> {
+        std::fs::write(path, serde_json::to_vec_pretty(self)?)
+            .with_context(|| format!("writing {}", path.display()))
+    }
+
+    /// Replace the rows for the files this stage rewrote, keeping the rest.
+    pub fn upsert_files(&mut self, rows: Vec<FileDTO>) {
+        for row in rows {
+            match self.files.iter_mut().find(|f| f.path == row.path) {
+                Some(slot) => *slot = row,
+                None => self.files.push(row),
+            }
+        }
+        self.files.sort_by(|a, b| a.path.cmp(&b.path));
+    }
+
+    /// Same, for the stage timing log.
+    pub fn upsert_stages(&mut self, rows: Vec<StageDTO>) {
+        for row in rows {
+            match self.stages.iter_mut().find(|s| s.name == row.name) {
+                Some(slot) => *slot = row,
+                None => self.stages.push(row),
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SchemaVersionsDTO {
     pub index: u32,
     pub chunk: u32,
+    pub demand: u32,
+    pub cch_order: u32,
 }
 
 impl Default for SchemaVersionsDTO {
@@ -28,11 +91,13 @@ impl Default for SchemaVersionsDTO {
         Self {
             index: VERSION_INDEX,
             chunk: VERSION_CHUNK,
+            demand: VERSION_DEMAND,
+            cch_order: VERSION_CCH_ORDER,
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GridDTO {
     pub cols: u32,
     pub rows: u32,
@@ -55,7 +120,7 @@ impl From<&GridSchema> for GridDTO {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct CountsDTO {
     pub nodes: u64,
     pub edges: u64,
@@ -65,13 +130,13 @@ pub struct CountsDTO {
     pub border_edges: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StageDTO {
     pub name: String,
     pub ms: u128,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileDTO {
     /// Path relative to the build directory, forward-slashed.
     pub path: String,

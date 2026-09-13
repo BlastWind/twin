@@ -1,14 +1,18 @@
 //! `twin-pipeline` — turns raw open data into the binaries the browser loads.
 //!
-//! Phase 1 implements the `ingest-roads` stage of DESIGN.md section 4.
+//! Implements the `ingest-roads`, `cch-order` and `demand` stages of
+//! DESIGN.md section 4.
 
 mod config;
+mod graph_io;
+mod lodes;
 mod manifest;
 mod osm;
+mod stages;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-use config::{ConfigLayer, PathsLayer, PipelineConfig, RoadSource, RoadsLayer};
+use config::{ConfigLayer, DemandLayer, PathsLayer, PipelineConfig, RoadSource, RoadsLayer};
 use manifest::*;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -33,6 +37,65 @@ struct Cli {
 enum Command {
     /// Parse a road network, chunk it, and write graph/*.bin + manifest.json.
     IngestRoads(IngestRoadsFlags),
+    /// Compute the nested-dissection contraction order over the whole graph.
+    CchOrder(CommonFlags),
+    /// Build zones and the OD matrix, and write demand.bin.
+    Demand(DemandFlags),
+}
+
+/// Flags every post-ingest stage shares: they all read the built graph.
+#[derive(Args, Debug)]
+struct CommonFlags {
+    #[arg(long)]
+    out: Option<PathBuf>,
+}
+
+#[derive(Args, Debug)]
+struct DemandFlags {
+    #[command(flatten)]
+    common: CommonFlags,
+    #[arg(long)]
+    raw_dir: Option<PathBuf>,
+    /// External zones ringing the study bbox.
+    #[arg(long)]
+    external_zones: Option<u32>,
+    /// Vehicle trips per LODES job.
+    #[arg(long)]
+    auto_factor: Option<f64>,
+    /// Skip LODES and synthesize a gravity model.
+    #[arg(long)]
+    synthetic: bool,
+}
+
+impl From<&CommonFlags> for ConfigLayer {
+    fn from(f: &CommonFlags) -> Self {
+        Self {
+            paths: PathsLayer {
+                raw_dir: None,
+                out_dir: f.out.clone(),
+            },
+            ..Default::default()
+        }
+    }
+}
+
+impl From<&DemandFlags> for ConfigLayer {
+    fn from(f: &DemandFlags) -> Self {
+        Self {
+            paths: PathsLayer {
+                raw_dir: f.raw_dir.clone(),
+                out_dir: f.common.out.clone(),
+            },
+            demand: DemandLayer {
+                external_zones: f.external_zones,
+                auto_factor: f.auto_factor,
+                // A bare `--synthetic` is an opinion; its absence is not.
+                synthetic: f.synthetic.then_some(true),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
 }
 
 /// The CLI layer of the config stack: every field optional, so an unset flag
@@ -66,6 +129,7 @@ impl From<&IngestRoadsFlags> for ConfigLayer {
                 raw_dir: None,
                 out_dir: f.out.clone(),
             },
+            demand: DemandLayer::default(),
             roads: RoadsLayer {
                 pbf: f.pbf.clone(),
                 bbox: f.bbox.clone(),
@@ -80,18 +144,119 @@ impl From<&IngestRoadsFlags> for ConfigLayer {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    // Highest priority first: flags <- env <- twin.toml <- defaults.
+    let resolve = |top: ConfigLayer| -> Result<PipelineConfig> {
+        PipelineConfig::resolve([
+            top,
+            ConfigLayer::from_env()?,
+            ConfigLayer::from_toml(&cli.config)?,
+            ConfigLayer::defaults(),
+        ])
+    };
     match &cli.command {
-        Command::IngestRoads(flags) => {
-            // Highest priority first: flags <- env <- twin.toml <- defaults.
-            let cfg = PipelineConfig::resolve([
-                ConfigLayer::from(flags),
-                ConfigLayer::from_env()?,
-                ConfigLayer::from_toml(&cli.config)?,
-                ConfigLayer::defaults(),
-            ])?;
-            ingest_roads(&cfg)
-        }
+        Command::IngestRoads(flags) => ingest_roads(&resolve(flags.into())?),
+        Command::CchOrder(flags) => cch_order(&resolve(flags.into())?),
+        Command::Demand(flags) => demand(&resolve(flags.into())?),
     }
+}
+
+/// Load the built graph, run one stage over it, and fold the result into the
+/// existing manifest rather than rewriting it.
+fn post_ingest_stage<T>(
+    cfg: &PipelineConfig,
+    name: &str,
+    run: impl FnOnce(&mut Vec<StageDTO>, &mut graph_io::LoadedGraph) -> Result<(T, FileDTO)>,
+    record: impl FnOnce(&mut ManifestDTO, &T),
+) -> Result<()> {
+    eprintln!("{name}");
+    let mut stages: Vec<StageDTO> = Vec::new();
+    let mut loaded = stage(&mut stages, "load-graph", || {
+        graph_io::load_all(&cfg.out_dir)
+    })?;
+    eprintln!(
+        "    graph                  {} nodes, {} edges, {} chunks",
+        loaded.graph.view().nodes().len(),
+        loaded.graph.view().edges().len(),
+        loaded.entries.len()
+    );
+    let (out, file) = run(&mut stages, &mut loaded)?;
+
+    let man_path = cfg.out_dir.join("manifest.json");
+    let mut man = ManifestDTO::load(&man_path)?;
+    man.schema = SchemaVersionsDTO::default();
+    man.upsert_files(vec![file]);
+    man.upsert_stages(stages);
+    record(&mut man, &out);
+    man.write(&man_path)?;
+    eprintln!("  manifest               {}", man_path.display());
+    Ok(())
+}
+
+fn cch_order(cfg: &PipelineConfig) -> Result<()> {
+    post_ingest_stage(
+        cfg,
+        "cch-order",
+        |stages, loaded| {
+            let out = stage(stages, "nested-dissection", || {
+                stages::build_cch_order(loaded)
+            })?;
+            let path = cfg.out_dir.join("cch_order.bin");
+            std::fs::write(&path, &out.bytes)
+                .with_context(|| format!("writing {}", path.display()))?;
+            eprintln!(
+                "    order                  {} nodes, {:?}, {:.2} MiB",
+                out.node_count,
+                out.kind,
+                out.bytes.len() as f64 / (1024.0 * 1024.0)
+            );
+            let file = FileDTO::of("cch_order.bin", &out.bytes);
+            Ok((out, file))
+        },
+        |man, out| {
+            man.cch_order = Some(CchOrderInfoDTO {
+                node_count: out.node_count,
+                kind: format!("{:?}", out.kind),
+            })
+        },
+    )
+}
+
+fn demand(cfg: &PipelineConfig) -> Result<()> {
+    post_ingest_stage(
+        cfg,
+        "demand",
+        |stages, loaded| {
+            let out = stage(stages, "zones+od", || stages::build_demand(cfg, loaded))?;
+            for note in &out.notes {
+                eprintln!("    {note}");
+            }
+            let path = cfg.out_dir.join("demand.bin");
+            std::fs::write(&path, &out.bytes)
+                .with_context(|| format!("writing {}", path.display()))?;
+            let zones_path = cfg.out_dir.join("zones.csv");
+            std::fs::write(&zones_path, &out.zones_csv)
+                .with_context(|| format!("writing {}", zones_path.display()))?;
+            eprintln!(
+                "    demand                 {} zones ({} internal), {} OD cells, {:.2} MiB{}",
+                out.zone_count,
+                out.external_start,
+                out.od_count,
+                out.bytes.len() as f64 / (1024.0 * 1024.0),
+                if out.is_synthetic { " [SYNTHETIC]" } else { "" }
+            );
+            let file = FileDTO::of("demand.bin", &out.bytes);
+            Ok((out, file))
+        },
+        |man, out| {
+            man.demand = Some(DemandInfoDTO {
+                zone_count: out.zone_count,
+                external_zone_start: out.external_start,
+                od_count: out.od_count,
+                is_synthetic: out.is_synthetic,
+                notes: out.notes.clone(),
+            })
+        },
+    )
 }
 
 /// Times one stage and reports it, keeping the timing plumbing out of the
@@ -110,14 +275,15 @@ fn stage<T>(log: &mut Vec<StageDTO>, name: &str, f: impl FnOnce() -> Result<T>) 
 
 fn ingest_roads(cfg: &PipelineConfig) -> Result<()> {
     eprintln!("ingest-roads");
-    eprintln!("  source                 {:?}", cfg.source);
+    let source = cfg.road_source()?;
+    eprintln!("  source                 {source:?}");
     eprintln!(
         "  bbox                   {},{},{},{}",
         cfg.bbox.west, cfg.bbox.south, cfg.bbox.east, cfg.bbox.north
     );
     let mut stages: Vec<StageDTO> = Vec::new();
 
-    let parsed = stage(&mut stages, "parse", || match &cfg.source {
+    let parsed = stage(&mut stages, "parse", || match source {
         RoadSource::SyntheticGrid(n) => Ok(RawGraph::synthetic_grid(*n, cfg.bbox)),
         RoadSource::Pbf(path) => {
             // A bare filename is looked up in the raw-data directory.
@@ -175,10 +341,12 @@ fn ingest_roads(cfg: &PipelineConfig) -> Result<()> {
         counts,
         stages: stages.clone(),
         files: files.clone(),
+        // A fresh network invalidates both; they are rebuilt by their stages.
+        demand: None,
+        cch_order: None,
     };
     let man_path = cfg.out_dir.join("manifest.json");
-    std::fs::write(&man_path, serde_json::to_vec_pretty(&man)?)
-        .with_context(|| format!("writing {}", man_path.display()))?;
+    man.write(&man_path)?;
 
     let total: u64 = files.iter().map(|f| f.bytes).sum();
     eprintln!(

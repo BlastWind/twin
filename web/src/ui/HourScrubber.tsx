@@ -35,8 +35,10 @@ export const HourScrubber = () => {
   useEffect(() => {
     const client = getSimClient()
     if (!client) return
-    if (!baseline[h]) client.selectHour('baseline', h)
-    if (mode !== 'baseline' && !scenario[h]) client.selectHour('scenario', h)
+    // an entry with no arrays is a KPI-only placeholder: ask for the real one
+    const thin = (r: { readonly vc: Float32Array } | undefined): boolean => !r || r.vc.length === 0
+    if (thin(baseline[h])) client.selectHour('baseline', h)
+    if (mode !== 'baseline' && thin(scenario[h])) client.selectHour('scenario', h)
   }, [h, mode, baseline, scenario])
 
   return (

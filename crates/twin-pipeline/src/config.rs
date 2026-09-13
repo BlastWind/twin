@@ -37,9 +37,25 @@ pub struct RoadsLayer {
 
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(deny_unknown_fields, default)]
+pub struct DemandLayer {
+    /// LODES 8 filenames, looked up in `paths.raw_dir`.
+    pub od_main: Option<PathBuf>,
+    pub od_aux: Option<PathBuf>,
+    pub xwalk: Option<PathBuf>,
+    /// External zones ringing the bbox, absorbing through traffic.
+    pub external_zones: Option<u32>,
+    /// Vehicle trips per LODES job: auto mode share over vehicle occupancy.
+    pub auto_factor: Option<f64>,
+    /// Skip LODES entirely and synthesize a gravity model.
+    pub synthetic: Option<bool>,
+}
+
+#[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
 pub struct ConfigLayer {
     pub paths: PathsLayer,
     pub roads: RoadsLayer,
+    pub demand: DemandLayer,
 }
 
 impl ConfigLayer {
@@ -57,6 +73,16 @@ impl ConfigLayer {
                 simplify: Some(true),
                 keep_service: Some(false),
                 synthetic_grid: None,
+            },
+            demand: DemandLayer {
+                od_main: Some("va_od_main_JT00_2023.csv.gz".into()),
+                od_aux: Some("va_od_aux_JT00_2023.csv.gz".into()),
+                xwalk: Some("va_xwalk.csv.gz".into()),
+                external_zones: Some(12),
+                // ~88 % auto mode share over ~1.1 occupants per commute
+                // vehicle. DESIGN.md section 9 leaves this to calibration.
+                auto_factor: Some(0.8),
+                synthetic: Some(false),
             },
         }
     }
@@ -94,6 +120,14 @@ impl ConfigLayer {
                 keep_service: flag("TWIN_KEEP_SERVICE")?,
                 synthetic_grid: num("TWIN_SYNTHETIC_GRID")?.map(|v| v as u32),
             },
+            demand: DemandLayer {
+                od_main: var("TWIN_OD_MAIN").map(PathBuf::from),
+                od_aux: var("TWIN_OD_AUX").map(PathBuf::from),
+                xwalk: var("TWIN_XWALK").map(PathBuf::from),
+                external_zones: num("TWIN_EXTERNAL_ZONES")?.map(|v| v as u32),
+                auto_factor: num("TWIN_AUTO_FACTOR")?,
+                synthetic: flag("TWIN_SYNTHETIC_DEMAND")?,
+            },
         })
     }
 
@@ -112,6 +146,14 @@ impl ConfigLayer {
                 keep_service: self.roads.keep_service.or(base.roads.keep_service),
                 synthetic_grid: self.roads.synthetic_grid.or(base.roads.synthetic_grid),
             },
+            demand: DemandLayer {
+                od_main: self.demand.od_main.or(base.demand.od_main),
+                od_aux: self.demand.od_aux.or(base.demand.od_aux),
+                xwalk: self.demand.xwalk.or(base.demand.xwalk),
+                external_zones: self.demand.external_zones.or(base.demand.external_zones),
+                auto_factor: self.demand.auto_factor.or(base.demand.auto_factor),
+                synthetic: self.demand.synthetic.or(base.demand.synthetic),
+            },
         }
     }
 }
@@ -122,11 +164,25 @@ impl ConfigLayer {
 pub struct PipelineConfig {
     pub raw_dir: PathBuf,
     pub out_dir: PathBuf,
-    pub source: RoadSource,
+    /// `None` when no road source was given. Only `ingest-roads` needs one, so
+    /// resolving without one is not an error — asking for it is.
+    source: Option<RoadSource>,
     pub bbox: BBox,
     pub cell_m: f64,
     pub simplify: bool,
     pub keep_service: bool,
+    pub demand: DemandConfig,
+}
+
+/// The resolved `demand` group.
+#[derive(Debug, Clone)]
+pub struct DemandConfig {
+    pub od_main: PathBuf,
+    pub od_aux: PathBuf,
+    pub xwalk: PathBuf,
+    pub external_zones: u32,
+    pub auto_factor: f64,
+    pub synthetic: bool,
 }
 
 /// Where the road network comes from. An ADT rather than a nullable `pbf`
@@ -147,10 +203,21 @@ impl PipelineConfig {
 
         let source = match (&merged.roads.pbf, merged.roads.synthetic_grid) {
             (Some(_), Some(_)) => bail!("give either roads.pbf or roads.synthetic_grid, not both"),
-            (Some(p), None) => RoadSource::Pbf(p.clone()),
-            (None, Some(n)) if n >= 2 => RoadSource::SyntheticGrid(n),
+            (Some(p), None) => Some(RoadSource::Pbf(p.clone())),
+            (None, Some(n)) if n >= 2 => Some(RoadSource::SyntheticGrid(n)),
             (None, Some(n)) => bail!("roads.synthetic_grid must be at least 2, got {n}"),
-            (None, None) => bail!("set roads.pbf or roads.synthetic_grid"),
+            (None, None) => None,
+        };
+        let d = merged.demand;
+        let demand = DemandConfig {
+            od_main: d.od_main.ok_or_else(|| miss("demand.od_main"))?,
+            od_aux: d.od_aux.ok_or_else(|| miss("demand.od_aux"))?,
+            xwalk: d.xwalk.ok_or_else(|| miss("demand.xwalk"))?,
+            external_zones: d
+                .external_zones
+                .ok_or_else(|| miss("demand.external_zones"))?,
+            auto_factor: d.auto_factor.ok_or_else(|| miss("demand.auto_factor"))?,
+            synthetic: d.synthetic.ok_or_else(|| miss("demand.synthetic"))?,
         };
         Ok(Self {
             raw_dir: merged.paths.raw_dir.ok_or_else(|| miss("paths.raw_dir"))?,
@@ -166,7 +233,15 @@ impl PipelineConfig {
                 .roads
                 .keep_service
                 .ok_or_else(|| miss("roads.keep_service"))?,
+            demand,
         })
+    }
+
+    /// The road source, or the error `ingest-roads` should print.
+    pub fn road_source(&self) -> Result<&RoadSource> {
+        self.source
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("set roads.pbf or roads.synthetic_grid"))
     }
 }
 
@@ -212,14 +287,18 @@ mod tests {
         ])
         .expect("resolves");
         assert_eq!(cfg.cell_m, 500.0, "the top layer wins");
-        assert_eq!(cfg.source, RoadSource::SyntheticGrid(8));
+        assert_eq!(cfg.road_source().ok(), Some(&RoadSource::SyntheticGrid(8)));
         assert_eq!(cfg.out_dir, PathBuf::from("data/build"), "default survives");
         assert!(cfg.simplify, "default survives");
     }
 
     #[test]
     fn a_source_is_required_and_exclusive() {
-        assert!(PipelineConfig::resolve([ConfigLayer::defaults()]).is_err());
+        let no_source = PipelineConfig::resolve([ConfigLayer::defaults()]).expect("resolves");
+        assert!(
+            no_source.road_source().is_err(),
+            "only ingest-roads needs a source, and it asks for one"
+        );
         let both = ConfigLayer {
             roads: RoadsLayer {
                 pbf: Some("a.pbf".into()),

@@ -51,15 +51,27 @@ const parseKpis = (json: string): KpiDTO => {
   }
 }
 
-const hourResult = (id: RunRequestDTO['id'], kind: ResultKind, h: Hour, cell: HourCell): HourResultDTO => {
+/**
+ * Only the selected hour ships its arrays; the other 23 cross as KPIs alone
+ * (empty arrays) so the scrubber and dashboard stay live without moving ~2 MB
+ * per hour. `select-hour` fills the arrays in on demand.
+ */
+const hourResult = (
+  id: RunRequestDTO['id'],
+  kind: ResultKind,
+  h: Hour,
+  cell: HourCell,
+  withArrays: boolean,
+): HourResultDTO => {
   const n = cell.raw.length / 3
+  const slice = (a: number, b: number): Float32Array => (withArrays ? cell.raw.slice(a, b) : new Float32Array(0))
   return {
     id,
     kind,
     hour: h,
-    volume: cell.raw.slice(0, n),
-    vc: cell.raw.slice(n, 2 * n),
-    delay: cell.raw.slice(2 * n, 3 * n),
+    volume: slice(0, n),
+    vc: slice(n, 2 * n),
+    delay: slice(2 * n, 3 * n),
     kpis: cell.kpis,
   }
 }
@@ -118,7 +130,7 @@ const runHours = (solver: SolverApi, req: RunRequestDTO): void => {
     const raw = solver.runHour(json, h)
     const cell: HourCell = { raw: raw.slice(), kpis: parseKpis(solver.kpisJson()) }
     cache.set(h, cell)
-    post({ type: 'hour-result', seq: 0, payload: hourResult(req.id, req.kind, h, cell) })
+    post({ type: 'hour-result', seq: 0, payload: hourResult(req.id, req.kind, h, cell, h === req.hours[0]) })
     setTimeout(step, 0)
   }
   step()
@@ -155,7 +167,7 @@ const handle = (solver: SolverApi, req: RequestDTO): void => {
       return post({
         type: 'hour-result',
         seq: req.seq,
-        payload: hourResult(0 as RunRequestDTO['id'], req.payload.kind, req.payload.hour, cell),
+        payload: hourResult(0 as RunRequestDTO['id'], req.payload.kind, req.payload.hour, cell, true),
       })
     }
     case 'run':
