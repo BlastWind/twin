@@ -67,7 +67,8 @@ fn chunk_merge_dedups_border_edges() {
         .map(|b| GraphChunkSchema::decode(b).expect("chunk decodes"))
         .collect();
 
-    let full = RoadGraph::from_chunks(decoded.iter()).expect("assembles");
+    let mut full = RoadGraph::from_chunks(decoded.iter()).expect("assembles");
+    let full = full.view();
     let expected_edges: usize = p.entries.iter().map(|e| e.edge_count as usize).sum();
     assert_eq!(full.nodes().len(), 16 * 16, "no duplicated ghost nodes");
     assert_eq!(
@@ -100,17 +101,23 @@ fn partial_load_exposes_boundary_edges() {
 
     let mut g = RoadGraph::new();
     let first = g.add_chunk(&decoded[0]).expect("first chunk loads");
-    assert!(g.boundary_edge_count() > 0, "lone chunk has open borders");
-    assert!(g.nodes().iter().any(|n| !n.resident), "ghost nodes present");
+    assert!(
+        g.view().boundary_edge_count() > 0,
+        "lone chunk has open borders"
+    );
+    assert!(
+        g.view().nodes().iter().any(|n| !n.resident),
+        "ghost nodes present"
+    );
 
     // Loading the rest closes the borders; unloading reopens them.
     for c in &decoded[1..] {
         g.add_chunk(c).expect("chunk loads");
     }
-    assert_eq!(g.boundary_edge_count(), 0);
+    assert_eq!(g.view().boundary_edge_count(), 0);
     assert!(g.remove_chunk(first));
     assert!(!g.remove_chunk(first), "removing twice is a no-op");
-    assert!(g.boundary_edge_count() > 0);
+    assert!(g.view().boundary_edge_count() > 0);
     assert_eq!(g.chunk_count(), decoded.len() - 1);
 }
 

@@ -182,3 +182,75 @@ pub fn parse_bbox(text: &str) -> Result<BBox> {
     };
     BBox::new(w, s, e, n).ok_or_else(|| anyhow::anyhow!("bbox `{text}` is not a sane extent"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn layer_with_cell(cell_m: f64) -> ConfigLayer {
+        ConfigLayer {
+            roads: RoadsLayer {
+                cell_m: Some(cell_m),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn later_layers_only_speak_where_they_have_a_value() {
+        let cfg = PipelineConfig::resolve([
+            layer_with_cell(500.0),
+            ConfigLayer {
+                roads: RoadsLayer {
+                    synthetic_grid: Some(8),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ConfigLayer::defaults(),
+        ])
+        .expect("resolves");
+        assert_eq!(cfg.cell_m, 500.0, "the top layer wins");
+        assert_eq!(cfg.source, RoadSource::SyntheticGrid(8));
+        assert_eq!(cfg.out_dir, PathBuf::from("data/build"), "default survives");
+        assert!(cfg.simplify, "default survives");
+    }
+
+    #[test]
+    fn a_source_is_required_and_exclusive() {
+        assert!(PipelineConfig::resolve([ConfigLayer::defaults()]).is_err());
+        let both = ConfigLayer {
+            roads: RoadsLayer {
+                pbf: Some("a.pbf".into()),
+                synthetic_grid: Some(4),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(PipelineConfig::resolve([both, ConfigLayer::defaults()]).is_err());
+    }
+
+    #[test]
+    fn bbox_parsing_rejects_nonsense() {
+        let b = parse_bbox(" -77.54, 38.60 ,-77.04,39.06").expect("parses with spaces");
+        assert_eq!((b.west, b.north), (-77.54, 39.06));
+        assert!(
+            parse_bbox("-77,38,-78,39").is_err(),
+            "west must precede east"
+        );
+        assert!(parse_bbox("1,2,3").is_err(), "needs four numbers");
+    }
+
+    #[test]
+    fn a_missing_toml_is_not_an_error() {
+        let layer = ConfigLayer::from_toml(Path::new("/nonexistent/twin.toml")).expect("silent");
+        assert!(layer.roads.bbox.is_none());
+    }
+
+    #[test]
+    fn the_project_toml_parses() {
+        let layer = ConfigLayer::from_toml(Path::new("../../twin.toml")).expect("parses");
+        assert_eq!(layer.roads.cell_m, Some(DEFAULT_CELL_M));
+    }
+}

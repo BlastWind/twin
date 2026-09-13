@@ -87,13 +87,18 @@ impl TwinWorld {
         self.graph.loaded_chunks().map(ChunkId::raw).collect()
     }
 
-    pub fn stats(&self) -> Result<JsValue, JsError> {
+    /// Takes `&mut self` because reading forces the pending chunk adds to be
+    /// assembled; loading a batch of chunks then calling `stats` once costs a
+    /// single rebuild.
+    pub fn stats(&mut self) -> Result<JsValue, JsError> {
+        let chunks_available = self.entries.len() as u32;
+        let view = self.graph.view();
         let stats = StatsDTO {
-            nodes: self.graph.nodes().len() as u32,
-            edges: self.graph.edges().len() as u32,
-            chunks: self.graph.chunk_count() as u32,
-            boundary_edges: self.graph.boundary_edge_count() as u32,
-            chunks_available: self.entries.len() as u32,
+            nodes: view.nodes().len() as u32,
+            edges: view.edges().len() as u32,
+            chunks: view.chunk_count() as u32,
+            boundary_edges: view.boundary_edge_count() as u32,
+            chunks_available,
             wasm_bytes: wasm_bytes(),
         };
         serde_wasm_bindgen::to_value(&stats).map_err(|e| JsError::new(&e.to_string()))

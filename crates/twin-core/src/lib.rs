@@ -10,7 +10,7 @@ pub mod ids;
 pub mod schema;
 
 pub use assembly::{partition, simplify_degree2, Partition, RawEdge, RawGraph, RawNode};
-pub use graph::{GraphEdge, GraphError, GraphNode, RoadGraph};
+pub use graph::{GraphEdge, GraphError, GraphNode, GraphView, RoadGraph};
 pub use graph_schema::{
     ChunkBuild, ChunkEdge, ChunkEntrySchema, ChunkMetaSchema, ChunkNode, GraphChunkSchema,
     GraphIndexSchema,

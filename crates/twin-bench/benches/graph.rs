@@ -69,7 +69,7 @@ fn bench_chunk_add(c: &mut Criterion) {
                     let chunk = GraphChunkSchema::decode(buf).expect("decodes");
                     g.add_chunk(&chunk).expect("adds");
                 }
-                black_box(g.edges().len())
+                black_box(g.view().edges().len())
             })
         });
     }
@@ -88,7 +88,8 @@ fn bench_chunk_remove(c: &mut Criterion) {
             .iter()
             .map(|b| GraphChunkSchema::decode(b).expect("decodes"))
             .collect();
-        let base = RoadGraph::from_chunks(decoded.iter()).expect("assembles");
+        let mut base = RoadGraph::from_chunks(decoded.iter()).expect("assembles");
+        base.view();
         let victim = decoded[decoded.len() / 2].chunk_id();
         group.throughput(Throughput::Elements(f.edge_count));
         group.bench_function(BenchmarkId::from_parameter(label), |b| {
@@ -97,7 +98,7 @@ fn bench_chunk_remove(c: &mut Criterion) {
                 |mut g| {
                     g.remove_chunk(victim);
                     g.add_chunk(&decoded[decoded.len() / 2]).expect("re-adds");
-                    black_box(g.boundary_edge_count())
+                    black_box(g.view().boundary_edge_count())
                 },
                 criterion::BatchSize::SmallInput,
             )
