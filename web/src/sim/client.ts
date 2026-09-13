@@ -1,4 +1,4 @@
-import { mark } from '../perf'
+import { gauge, mark } from '../perf'
 import { useSimStore, useUiStore, useWorldStore } from '../state/stores'
 import { AssetLoader, Priority, type AssetPath } from './AssetLoader'
 import {
@@ -60,9 +60,14 @@ const applyResponse = (res: ResponseDTO): void => {
       return world.putGeometry(res.payload)
     case 'edge-order':
       return world.setOrder(res.payload.edges)
-    case 'hour-result':
+    case 'hour-result': {
       if (res.payload.kind === 'baseline' && res.payload.hour === BASELINE_HOUR) mark('first-baseline')
-      return useSimStore.getState().putResult(res.payload)
+      useSimStore.getState().putResult(res.payload)
+      const sim = useSimStore.getState()
+      gauge('baselineHours', Object.keys(sim.baseline).length)
+      gauge('scenarioHours', Object.keys(sim.scenario).length)
+      return
+    }
     case 'run-done':
       return useSimStore.getState().setStatus('done', res.payload.kind)
     case 'error':
@@ -84,6 +89,7 @@ export const createSimClient = (): SimClient => {
     seq += 1
     const { message, transfer } = encodeRequest({ ...req, seq } as RequestDTO)
     bytes += transferBytes(transfer)
+    gauge('workerMessageBytes', bytes)
     worker.postMessage(message, transfer)
   }
 
@@ -97,7 +103,7 @@ export const createSimClient = (): SimClient => {
     // AssetLoader already caps concurrency at 6; fire them all and let it queue.
     await Promise.allSettled(
       ordered.map(async (key) => {
-        const [cx, cy] = key.split('_').map(Number)
+        const [cx, cy] = key.split('_').map(Number) as [number, number]
         const buf = await loader!.get(chunkPath(cx, cy) as AssetPath, priority)
         send({ type: 'load-chunk', payload: { chunk: key, chunkIx: chunkIx(cx, cy, m.grid.cols), bytes: buf } })
       }),
@@ -137,7 +143,7 @@ export const createSimClient = (): SimClient => {
         type: 'free-chunk',
         payload: {
           chunks: toFree.map((chunk) => {
-            const [cx, cy] = chunk.split('_').map(Number)
+            const [cx, cy] = chunk.split('_').map(Number) as [number, number]
             return { chunk, chunkIx: chunkIx(cx, cy, cols) }
           }),
         },

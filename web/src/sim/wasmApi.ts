@@ -118,6 +118,9 @@ const hash01 = (x: number): number => {
 const hourFactor = (h: number): number =>
   Math.max(0.06, Math.exp(-(((h - 8) / 2.1) ** 2)) + 0.85 * Math.exp(-(((h - 17.5) / 2.4) ** 2)))
 
+/** How much of the trip table a class carries, by `RoadClass` byte. */
+const CLASS_WEIGHT: readonly number[] = [1, 0.9, 0.75, 0.6, 0.45, 0.25, 0.25, 0.1, 0.1, 0.2]
+
 type StubEdge = {
   readonly gid: number
   readonly lenM: number
@@ -160,12 +163,12 @@ export const createStubSolver = (): SolverApi => {
       const c: GraphChunkSchema = decodeChunk(b.slice().buffer)
       chunks.set(
         id,
-        Array.from({ length: c.meta.edgeCount }, (_, i) => ({
-          gid: c.edgeGid[i],
-          lenM: c.edgeLenM[i],
-          capacityVph: c.edgeCapacityVph[i],
-          ffSpeedKph: c.edgeFfSpeedKph[i],
-          classByte: c.edgeClass[i],
+        Array.from({ length: c.meta.edgeCount }, (_, i): StubEdge => ({
+          gid: c.edgeGid[i]!,
+          lenM: c.edgeLenM[i]!,
+          capacityVph: c.edgeCapacityVph[i]!,
+          ffSpeedKph: c.edgeFfSpeedKph[i]!,
+          classByte: c.edgeClass[i]!,
         })),
       )
       rebuild()
@@ -193,7 +196,7 @@ export const createStubSolver = (): SolverApi => {
       edges.forEach((e, i) => {
         const cap = Math.max(1, capScale.get(e.gid) ?? e.capacityVph)
         // heavier classes carry more of the trip table
-        const classWeight = [1, 0.9, 0.75, 0.6, 0.45, 0.25, 0.25, 0.1, 0.1, 0.2][e.classByte] ?? 0.2
+        const classWeight = CLASS_WEIGHT[e.classByte] ?? 0.2
         const volume = closed.has(e.gid) ? 0 : (0.35 + 0.9 * hash01(e.gid)) * cap * classWeight * peak
         const vc = volume / cap
         const ffS = (e.lenM / 1000 / Math.max(5, e.ffSpeedKph)) * 3600
@@ -207,7 +210,7 @@ export const createStubSolver = (): SolverApi => {
         delaySum += delay
       })
       const top = [...order]
-        .map((gid, i) => ({ edge_id: gid, vc: out[n + i] }))
+        .map((gid, i) => ({ edge_id: gid, vc: out[n + i] ?? 0 }))
         .sort((a, b) => b.vc - a.vc)
         .slice(0, 10)
       kpis = { vmt, vht, mean_delay_s: n ? delaySum / n : 0, top_edges: top }

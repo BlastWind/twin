@@ -73,7 +73,7 @@ const geometryOf = (chunk: ChunkKey, bytes: ArrayBuffer): ChunkGeometryDTO => {
   const c = decodeChunk(bytes)
   const e = c.meta.edgeCount
   const counts = Array.from({ length: e }, (_, i) =>
-    c.geomOffsets ? c.geomOffsets[i + 1] - c.geomOffsets[i] : 2,
+    c.geomOffsets ? c.geomOffsets[i + 1]! - c.geomOffsets[i]! : 2,
   ).map((n) => (n >= 2 ? n : 2))
   const total = counts.reduce((a, b) => a + b, 0)
   const positions = new Float32Array(total * 2)
@@ -81,14 +81,14 @@ const geometryOf = (chunk: ChunkKey, bytes: ArrayBuffer): ChunkGeometryDTO => {
   let at = 0
   for (let i = 0; i < e; i += 1) {
     startIndices[i] = at
-    if (c.geomOffsets && c.geomLonLat && counts[i] > 2) {
-      positions.set(c.geomLonLat.subarray(c.geomOffsets[i] * 2, c.geomOffsets[i + 1] * 2), at * 2)
+    if (c.geomOffsets && c.geomLonLat && counts[i]! > 2) {
+      positions.set(c.geomLonLat.subarray(c.geomOffsets[i]! * 2, c.geomOffsets[i + 1]! * 2), at * 2)
     } else {
-      const f = c.edgeFrom[i] * 2
-      const t = c.edgeTo[i] * 2
-      positions.set([c.nodeLonLat[f], c.nodeLonLat[f + 1], c.nodeLonLat[t], c.nodeLonLat[t + 1]], at * 2)
+      const f = c.edgeFrom[i]! * 2
+      const t = c.edgeTo[i]! * 2
+      positions.set([c.nodeLonLat[f]!, c.nodeLonLat[f + 1]!, c.nodeLonLat[t]!, c.nodeLonLat[t + 1]!], at * 2)
     }
-    at += counts[i]
+    at += counts[i]!
   }
   startIndices[e] = at
   return { chunk, edges: c.edgeGid.slice(), classes: c.edgeClass.slice(), positions, startIndices }

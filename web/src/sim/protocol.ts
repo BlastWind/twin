@@ -170,7 +170,7 @@ export const encodeResponse = (res: ResponseDTO): { readonly message: ResponseDT
 
 /** Bytes actually handed to `postMessage` — the perf harness asserts on these. */
 export const transferBytes = (transfer: readonly Transferable[]): number =>
-  transfer.reduce((n, t) => n + ((t as ArrayBuffer).byteLength ?? 0), 0)
+  transfer.reduce<number>((n, t) => n + ((t as ArrayBuffer).byteLength ?? 0), 0)
 
 const REQUEST_TYPES: ReadonlySet<string> = new Set<RequestType>([
   'load-index',
