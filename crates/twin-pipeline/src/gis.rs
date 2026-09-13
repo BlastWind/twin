@@ -46,9 +46,15 @@ pub fn build_gis(raw_dir: &Path, out_dir: &Path) -> Result<GisOutput> {
     std::fs::create_dir_all(&dst).with_context(|| format!("creating {}", dst.display()))?;
 
     let mut notes = Vec::new();
+    // Parcels arrive as three tables joined on the parcel id: polygons under
+    // `PIN`, land use and zoning under `PARID`, assessed values under `PARID`.
     let values = parcel_values(&src.join("parcel_values"))?;
     if values.is_empty() {
         notes.push("no parcel assessed values on disk; parcels carry geometry only".into());
+    }
+    let attrs = parcel_attrs(&src.join("parcels"))?;
+    if attrs.is_empty() {
+        notes.push("no parcel attribute table on disk; parcels carry no land use or zone".into());
     }
 
     let layers = vec![
@@ -59,10 +65,10 @@ pub fn build_gis(raw_dir: &Path, out_dir: &Path) -> Result<GisOutput> {
             building_props,
         )?,
         normalise(
-            &src.join("parcels"),
+            &src.join("parcel_geom"),
             &dst.join("parcels.geojsonl"),
             "parcels",
-            |f| parcel_props(f, &values),
+            |f| parcel_props(f, &attrs, &values),
         )?,
         normalise(
             &src.join("zoning"),
@@ -150,18 +156,54 @@ fn parcel_values(dir: &Path) -> Result<HashMap<String, (u32, f64)>> {
     Ok(out)
 }
 
+/// Land use and zoning per parcel, from the tabular sibling of the polygons.
+/// Later tax years win, as with the values.
+fn parcel_attrs(dir: &Path) -> Result<HashMap<String, (u32, ParcelAttrs)>> {
+    let mut out: HashMap<String, (u32, ParcelAttrs)> = HashMap::new();
+    arcgis::for_each_feature(dir, |f| {
+        let Some(id) = f.text("PARID") else {
+            return Ok(());
+        };
+        let year = f.num("TAXYR").unwrap_or(0.0) as u32;
+        let slot = out.entry(id.to_string()).or_default();
+        if year >= slot.0 {
+            *slot = (
+                year,
+                ParcelAttrs {
+                    zone: f.text("ZONING_DESC").map(str::to_string),
+                    land_use: f.text("LUC_DESC").map(str::to_string),
+                },
+            );
+        }
+        Ok(())
+    })?;
+    Ok(out)
+}
+
+/// The two attributes the `parcels` tile layer carries beyond geometry and
+/// value. A named struct rather than a tuple, because a bare
+/// `(Option<String>, Option<String>)` at the join site says nothing.
+#[derive(Debug, Clone, Default)]
+struct ParcelAttrs {
+    zone: Option<String>,
+    land_use: Option<String>,
+}
+
+/// The polygon layer keys on `PIN`; the two attribute tables key on `PARID`.
+/// They are the same string.
 fn parcel_props(
     f: &FeatureDTO,
+    attrs: &HashMap<String, (u32, ParcelAttrs)>,
     values: &HashMap<String, (u32, f64)>,
 ) -> Option<Map<String, Value>> {
-    let parcel_id = f.text("PARID")?;
-    let assessed = values.get(parcel_id).map(|(_, v)| *v);
+    let parcel_id = f.text("PIN")?;
+    let attr = attrs.get(parcel_id).map(|(_, a)| a);
     Some(
         json!({
             "parcel_id": parcel_id,
-            "zone": f.text("ZONING_DESC"),
-            "land_use": f.text("LUC_DESC"),
-            "assessed_value": assessed,
+            "zone": attr.and_then(|a| a.zone.clone()),
+            "land_use": attr.and_then(|a| a.land_use.clone()),
+            "assessed_value": values.get(parcel_id).map(|(_, v)| *v),
             "area_m2": polygon_area_m2(&f.points()).round(),
         })
         .as_object()?
@@ -226,11 +268,21 @@ mod tests {
     #[test]
     fn a_parcel_joins_its_latest_assessment() {
         let values = HashMap::from([("0123 45".to_string(), (2025u32, 812_000.0f64))]);
+        let attrs = HashMap::from([(
+            "0123 45".to_string(),
+            (
+                2025u32,
+                ParcelAttrs {
+                    zone: Some("R-3".into()),
+                    land_use: Some("Single Family".into()),
+                },
+            ),
+        )]);
         let f = feature(
-            r#"{"properties":{"PARID":"0123 45","LUC_DESC":"Single Family","ZONING_DESC":"R-3"},
+            r#"{"properties":{"PIN":"0123 45"},
                 "geometry":{"type":"Polygon","coordinates":[[[-77.30,38.85],[-77.2990,38.85],[-77.2990,38.8509],[-77.30,38.8509],[-77.30,38.85]]]}}"#,
         );
-        let p = parcel_props(&f, &values).expect("mapped");
+        let p = parcel_props(&f, &attrs, &values).expect("mapped");
         assert_eq!(p["assessed_value"], json!(812_000.0));
         assert_eq!(p["zone"], json!("R-3"));
         let area = p["area_m2"].as_f64().expect("area");
@@ -239,9 +291,15 @@ mod tests {
 
     #[test]
     fn a_parcel_with_no_assessment_still_gets_a_row() {
-        let f = feature(r#"{"properties":{"PARID":"9 9"}}"#);
-        let p = parcel_props(&f, &HashMap::new()).expect("mapped");
+        let f = feature(r#"{"properties":{"PIN":"9 9"}}"#);
+        let p = parcel_props(&f, &HashMap::new(), &HashMap::new()).expect("mapped");
         assert!(p["assessed_value"].is_null());
-        assert!(parcel_props(&feature(r#"{"properties":{}}"#), &HashMap::new()).is_none());
+        assert!(p["land_use"].is_null());
+        assert!(parcel_props(
+            &feature(r#"{"properties":{}}"#),
+            &HashMap::new(),
+            &HashMap::new()
+        )
+        .is_none());
     }
 }

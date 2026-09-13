@@ -80,7 +80,8 @@ done
 FFX="https://services1.arcgis.com/ioennV6PpG5Xodq0/arcgis/rest/services"
 VDOT="https://services.arcgis.com/p5v98VHDX9Atv3l7/ArcGIS/rest/services"
 BUILDINGS_URL="$FFX/Buildings/FeatureServer/0"                  # BLDG_HEIGHT, TOP_ELEV, GROUND_ELEV
-PARCELS_URL="$FFX/OpenData_A6/FeatureServer/1"                  # PARID, LUC_DESC, ZONING_DESC
+PARCEL_GEOM_URL="$FFX/Parcels/FeatureServer/0"                  # PIN, the polygons
+PARCELS_URL="$FFX/OpenData_A6/FeatureServer/1"                  # PARID, LUC_DESC, ZONING_DESC (tabular)
 PARCEL_VALUES_URL="$FFX/OpenData_A6/FeatureServer/2"            # PARID, APRTOT (tabular)
 ZONING_URL="$FFX/Zoning/FeatureServer/0"                        # ZONECODE, ZONETYPE
 COUNTS_URL="$VDOT/VDOT_Traffic_Volume_2024/FeatureServer/0"     # ADT, AAWDT, ROUTE_COMMON_NAME
@@ -170,7 +171,8 @@ print(-1 if 'error' in d else len(d.get('features', [])))" "$1" 2>/dev/null || e
 if [[ "${TWIN_SKIP_GIS:-0}" != "1" ]]; then
   echo "arcgis  Fairfax County GIS + VDOT -> $GIS_DIR"
   arcgis_layer buildings     "$BUILDINGS_URL"     "1=1" || true
-  arcgis_layer parcels       "$PARCELS_URL"       "1=1" || true
+  arcgis_layer parcel_geom   "$PARCEL_GEOM_URL"   "1=1" || true
+  arcgis_layer parcels       "$PARCELS_URL"       "1=1" no || true
   arcgis_layer parcel_values "$PARCEL_VALUES_URL" "1=1" no || true
   arcgis_layer zoning        "$ZONING_URL"        "1=1" || true
   arcgis_layer counts        "$COUNTS_URL"        "1=1" || true
