@@ -18,15 +18,30 @@ const createMap = async (container: HTMLDivElement) => {
   const archive = new pmtiles.PMTiles(WORLD_PMTILES_URL)
   protocol.add(archive)
   maplibre.addProtocol('pmtiles', protocol.tile)
-  useUiStore.getState().setSourceLayers(await probeSourceLayers(archive))
   const { layers, registry } = useUiStore.getState()
-  return new Map({
+  const map = new Map({
     container,
     style: buildStyle(layers, registry),
     ...FAIRFAX_CAMERA,
     canvasContextAttributes: { antialias: true },
     attributionControl: { compact: true },
   })
+  return { map, archive }
+}
+
+/**
+ * The tiles' `vector_layers` decide which Phase-3 layers exist, but the answer
+ * is a range request away and the map must not wait on it: the style starts
+ * with what the Phase-1/2 tiles are known to carry and is replaced once the
+ * probe lands, and only if it found something new.
+ */
+const probeLayers = async (map: MapHandle, archive: { getMetadata: () => Promise<unknown> }): Promise<void> => {
+  const present = await probeSourceLayers(archive)
+  const before = new Set(useUiStore.getState().registry.filter((e) => e.available).map((e) => e.sourceLayer))
+  useUiStore.getState().setSourceLayers(present)
+  const { registry, layers } = useUiStore.getState()
+  const added = registry.filter((e) => e.available && !before.has(e.sourceLayer))
+  if (added.length > 0) map.setStyle(buildStyle(layers, registry))
 }
 
 export const MapView = () => {
@@ -41,7 +56,7 @@ export const MapView = () => {
     const el = container.current
     if (!el) return
     let disposed = false
-    void createMap(el).then((map) => {
+    void createMap(el).then(({ map, archive }) => {
       if (disposed) return map.remove()
       mapRef.current = map as unknown as typeof mapRef.current
       map.on('style.load', () => mark('style-ready'))
@@ -55,6 +70,7 @@ export const MapView = () => {
       })
       ;(globalThis as { __twinMap?: unknown }).__twinMap = map
       setMap(map as unknown as MapHandle)
+      void probeLayers(map as unknown as MapHandle, archive)
       return undefined
     })
     return () => {

@@ -24,6 +24,7 @@ export type MapHandle = {
   on: (event: string, fn: (e: never) => void) => void
   off: (event: string, fn: (e: never) => void) => void
   setLayoutProperty: (id: string, k: string, v: string) => void
+  setStyle: (style: unknown) => void
   remove: () => void
 }
 
