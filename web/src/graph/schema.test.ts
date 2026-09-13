@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { decodeChunk, edgeGeometry, MAGIC_CHUNK, SchemaError, SectionKind, roadClass, type LocalEdgeIx } from './schema'
+import { decodeChunk, decodeIndex, edgeGeometry, MAGIC_CHUNK, SchemaError, SectionKind, roadClass, type LocalEdgeIx } from './schema'
 
 /** Minimal mirror of `schema::FileWriter`, so the test owns its fixtures. */
 type Section = { kind: number; elemSize: number; len: number; payload: Uint8Array }
@@ -165,5 +165,26 @@ describe.skipIf(!existsSync(REAL))('chunk decoder on real pipeline output', () =
       (n) => n > 4,
     ).length
     expect(bent).toBeGreaterThan(0)
+  })
+})
+
+const REAL_INDEX = '/home/flober/repos/twin/data/build/graph/index.bin'
+
+describe.skipIf(!existsSync(REAL_INDEX))('index decoder on real pipeline output', () => {
+  /**
+   * The grid record is 56 bytes, not a padded 64: six f64s then two u32s.
+   * Getting that wrong made the whole index fail to decode, so it is pinned.
+   */
+  it('decodes the grid and the chunk table', () => {
+    const file = readFileSync(REAL_INDEX)
+    const ix = decodeIndex(file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength) as ArrayBuffer)
+    expect(ix.grid.cols).toBeGreaterThan(0)
+    expect(ix.grid.rows).toBeGreaterThan(0)
+    expect(ix.grid.minLon).toBeLessThan(ix.grid.maxLon)
+    expect(ix.grid.minLat).toBeLessThan(ix.grid.maxLat)
+    expect(ix.grid.cellLonDeg).toBeGreaterThan(0)
+    expect(ix.chunks.length).toBeGreaterThan(0)
+    expect(ix.chunks.every((c) => c.cx < ix.grid.cols && c.cy < ix.grid.rows)).toBe(true)
+    expect(ix.chunks.reduce((n, c) => n + c.edgeCount, 0)).toBeGreaterThan(0)
   })
 })

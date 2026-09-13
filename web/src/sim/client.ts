@@ -25,6 +25,7 @@ import {
   type ManifestDTO,
   type StudyArea,
 } from '../graph/manifest'
+import { decodeIndex } from '../graph/schema'
 import { FAIRFAX_CAMERA } from '../map/layers'
 
 /**
@@ -47,7 +48,8 @@ const BASELINE_HOUR: Hour = hour(8)
 const MANIFEST_PATH = 'manifest.json' as AssetPath
 const INDEX_PATH = 'graph/index.bin' as AssetPath
 
-const rest = (first: Hour): readonly Hour[] => ALL_HOURS.filter((h) => h !== first)
+/** The hour on screen is computed first; the other 23 are the background sweep. */
+const selectedFirst = (first: Hour): readonly Hour[] => [first, ...ALL_HOURS.filter((h) => h !== first)]
 
 const applyResponse = (res: ResponseDTO): void => {
   const world = useWorldStore.getState()
@@ -97,6 +99,8 @@ export const createSimClient = (): SimClient => {
   let manifest: ManifestDTO | null = null
   let resident: ReadonlySet<ChunkKey> = new Set()
   let nextRun = 0
+  let activeRun: RunId | null = null
+  let demandReady = false
 
   const loadChunks = async (m: ManifestDTO, keys: readonly ChunkKey[], priority: Priority): Promise<void> => {
     const ordered = orderByDistance(keys, m, FAIRFAX_CAMERA.center)
@@ -110,26 +114,46 @@ export const createSimClient = (): SimClient => {
     )
   }
 
-  /** demand + CCH order are idle-priority and optional until the Rust track ships them. */
+/**
+   * Demand and the CCH order queue at idle priority but are *awaited*: the
+   * solver rejects `runHour` before `loadDemand`, so the baseline cannot start
+   * until they land. Missing files leave `demandReady` false and the baseline
+   * is skipped with a clear error rather than a solver exception per hour.
+   */
   const loadIdleAssets = async (): Promise<void> => {
     const pairs = [
       ['demand.bin', 'load-demand'],
       ['cch_order.bin', 'load-cch-order'],
     ] as const
-    await Promise.all(
+    const got = await Promise.all(
       pairs.map(async ([path, type]) => {
         const buf = await loader!.get(path as AssetPath, Priority.Idle).catch(() => null)
         if (buf) send({ type, payload: { bytes: buf } })
+        return buf !== null
       }),
     )
+    demandReady = got[0] === true
   }
 
-  const run = (kind: ResultKind, scenario: ScenarioDTO, hours: readonly Hour[] = [BASELINE_HOUR, ...rest(BASELINE_HOUR)]): void => {
+  /**
+   * Starting a run cancels whatever is still sweeping: a stale 24-hour sweep
+   * would otherwise sit in front of the hour the user is actually waiting on,
+   * and at county scale one hour is tens of seconds.
+   */
+  const cancelActive = (): void => {
+    if (activeRun === null) return
+    send({ type: 'cancel', payload: { id: activeRun } })
+    activeRun = null
+  }
+
+  const run = (kind: ResultKind, scenario: ScenarioDTO, hours?: readonly Hour[]): void => {
+    cancelActive()
     nextRun += 1
     const id = runId(nextRun) as RunId
+    activeRun = id
     useSimStore.getState().clear(kind)
     useSimStore.getState().setStatus('running', kind)
-    send({ type: 'run', payload: { id, kind, scenario, hours } })
+    send({ type: 'run', payload: { id, kind, scenario, hours: hours ?? selectedFirst(useUiStore.getState().hour) } })
   }
 
   const setStudyArea = async (area: StudyArea): Promise<void> => {
@@ -155,6 +179,17 @@ export const createSimClient = (): SimClient => {
     }
     resident = wanted
     await loadChunks(manifest, toLoad, Priority.StudyArea)
+    startBaseline()
+  }
+
+  /** The one place that decides whether a baseline run is possible. */
+  const startBaseline = (): void => {
+    if (!demandReady) {
+      return useWorldStore.getState().setError({
+        code: 'load-failed',
+        message: 'demand.bin is missing, so no hour can be assigned',
+      })
+    }
     run('baseline', { edits: [] })
   }
 
@@ -168,6 +203,9 @@ export const createSimClient = (): SimClient => {
     loader = new AssetLoader({ manifestHash: m.hash })
 
     const index = await loader.get(INDEX_PATH, Priority.Viewport)
+    // decode before transferring: the chunk table's per-cell edge counts are
+    // what the study-area picker costs a selection with
+    useWorldStore.getState().setIndex(decodeIndex(index).chunks)
     send({ type: 'load-index', payload: { manifestHash: m.hash, index } })
     mark('index')
 
@@ -176,9 +214,11 @@ export const createSimClient = (): SimClient => {
     await loadChunks(m, keys, Priority.StudyArea)
     mark('chunks')
 
-    // baseline first (it is the diff target); the big idle blobs follow.
-    run('baseline', { edits: [] })
-    void loadIdleAssets()
+    // the solver refuses to assign before demand is loaded, so the baseline
+    // waits on it rather than racing it
+    await loadIdleAssets()
+    mark('demand')
+    startBaseline()
     send({ type: 'stats', payload: {} })
   }
 

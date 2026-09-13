@@ -159,3 +159,8 @@ button.link { background: none; border: none; color: var(--dim); text-decoration
   border-radius: 6px;
   font-size: 11px;
 }
+
+/* study-area cost estimate */
+.estimate { margin: 2px 0 4px; font-size: 11px; color: var(--dim); }
+.estimate.heavy { color: #e8a04a; }
+.warn-tag { display: block; color: #ff9c8d; margin-top: 2px; }

@@ -81,29 +81,102 @@ export const chunkCells = (m: ManifestDTO): readonly { readonly cx: number; read
     .filter((hit): hit is RegExpExecArray => hit !== null)
     .map((hit) => ({ cx: Number(hit[1]), cy: Number(hit[2]), path: hit[0] }))
 
+/**
+ * Cell index of a coordinate along one axis.
+ *
+ * Subtracting degrees leaves a coordinate that should land exactly on a cell
+ * boundary sitting a few ulps below it, and a bare `floor` would then put it in
+ * the previous cell - enough to shift the whole default block. Values within an
+ * ulp-scale epsilon of a boundary are snapped to it first.
+ *
+ * `edge` says which side of a boundary a point on it belongs to: the low corner
+ * of a window takes the cell that starts there, the high corner the cell that
+ * ends there, so a rectangle spanning exactly two cells selects two, not three.
+ */
+const EPS = 1e-9
+
+const axisCell = (value: number, min: number, size: number, count: number, edge: 'lo' | 'hi'): number => {
+  const raw = (value - min) / size
+  const nearest = Math.round(raw)
+  const exact = Math.abs(raw - nearest) < EPS
+  const ix = exact ? (edge === 'hi' ? nearest - 1 : nearest) : Math.floor(raw)
+  return Math.min(count - 1, Math.max(0, ix))
+}
+
 /** Grid cell containing a lon/lat, clamped to the grid. */
-const cellOf = (m: ManifestDTO, lon: number, lat: number): { cx: number; cy: number } => ({
-  cx: Math.min(m.grid.cols - 1, Math.max(0, Math.floor((lon - m.grid.minLon) / m.grid.cellLonDeg))),
-  cy: Math.min(m.grid.rows - 1, Math.max(0, Math.floor((lat - m.grid.minLat) / m.grid.cellLatDeg))),
+const cellOf = (m: ManifestDTO, lon: number, lat: number, edge: 'lo' | 'hi' = 'lo'): { cx: number; cy: number } => ({
+  cx: axisCell(lon, m.grid.minLon, m.grid.cellLonDeg, m.grid.cols, edge),
+  cy: axisCell(lat, m.grid.minLat, m.grid.cellLatDeg, m.grid.rows, edge),
 })
 
 /**
- * The study area: the set of chunks to keep resident. `null` bbox means the
- * whole county, which is the default.
+ * The study area: which chunks stay resident. An assignment hour costs roughly
+ * the cube of the edge count, so this is the single biggest performance knob in
+ * the app and is modelled explicitly rather than as a nullable bbox.
  */
-export type StudyArea = { readonly bbox: BBox | null }
+export type StudyArea =
+  /** A square of `2r + 1` cells centred on a point — the default. */
+  | { readonly kind: 'block'; readonly center: readonly [number, number]; readonly radius: number }
+  | { readonly kind: 'rect'; readonly bbox: BBox }
+  | { readonly kind: 'county' }
 
-export const WHOLE_COUNTY: StudyArea = { bbox: null }
+/** Fairfax City, the centre of the default block. */
+export const FAIRFAX_CITY: readonly [number, number] = [-77.3, 38.85]
+
+/**
+ * Radius 4 is ~16 km square and ~36k edges, which the wasm solver assigns in
+ * about a second. The whole county is 165k edges and ~83 s per hour, far too
+ * slow to open on.
+ */
+export const DEFAULT_BLOCK_RADIUS = 4
+
+export const DEFAULT_STUDY_AREA: StudyArea = {
+  kind: 'block',
+  center: FAIRFAX_CITY,
+  radius: DEFAULT_BLOCK_RADIUS,
+}
+
+export const WHOLE_COUNTY: StudyArea = { kind: 'county' }
+
+/** Chebyshev-radius cell window around a point, clamped to the grid. */
+const blockCells = (m: ManifestDTO, center: readonly [number, number], radius: number) => {
+  const mid = cellOf(m, center[0], center[1])
+  return {
+    lo: { cx: Math.max(0, mid.cx - radius), cy: Math.max(0, mid.cy - radius) },
+    hi: { cx: Math.min(m.grid.cols - 1, mid.cx + radius), cy: Math.min(m.grid.rows - 1, mid.cy + radius) },
+  }
+}
+
+/** Cell window of a bounded area. `county` is handled by the callers. */
+const window_ = (m: ManifestDTO, area: Exclude<StudyArea, { kind: 'county' }>) => {
+  if (area.kind === 'block') return blockCells(m, area.center, area.radius)
+  const [w, s, e, n] = area.bbox
+  return {
+    lo: cellOf(m, Math.min(w, e), Math.min(s, n), 'lo'),
+    hi: cellOf(m, Math.max(w, e), Math.max(s, n), 'hi'),
+  }
+}
 
 export const chunksInArea = (m: ManifestDTO, area: StudyArea): readonly ChunkKey[] => {
   const cells = chunkCells(m)
-  if (!area.bbox) return cells.map((c) => chunkKey(c.cx, c.cy))
-  const [w, s, e, n] = area.bbox
-  const lo = cellOf(m, Math.min(w, e), Math.min(s, n))
-  const hi = cellOf(m, Math.max(w, e), Math.max(s, n))
+  if (area.kind === 'county') return cells.map((c) => chunkKey(c.cx, c.cy))
+  const { lo, hi } = window_(m, area)
   return cells
     .filter((c) => c.cx >= lo.cx && c.cx <= hi.cx && c.cy >= lo.cy && c.cy <= hi.cy)
     .map((c) => chunkKey(c.cx, c.cy))
+}
+
+/** Geographic extent of an area, for a fit-bounds or an outline. */
+export const areaBBox = (m: ManifestDTO, area: StudyArea): BBox => {
+  if (area.kind === 'rect') return area.bbox
+  if (area.kind === 'county') return m.bbox
+  const { lo, hi } = window_(m, area)
+  return [
+    m.grid.minLon + lo.cx * m.grid.cellLonDeg,
+    m.grid.minLat + lo.cy * m.grid.cellLatDeg,
+    m.grid.minLon + (hi.cx + 1) * m.grid.cellLonDeg,
+    m.grid.minLat + (hi.cy + 1) * m.grid.cellLatDeg,
+  ]
 }
 
 /** Chunk-loading order: nearest the camera first, so the visible area fills in. */
@@ -120,3 +193,34 @@ export const orderByDistance = (
   }
   return [...cells].sort((a, b) => dist(a) - dist(b))
 }
+
+// ------------------------------------------------------- cost of an area
+
+/**
+ * Edges in the chunks an area selects. Read off the index's chunk table, which
+ * the client decodes before handing the buffer to the worker.
+ */
+export const edgesInArea = (
+  chunks: readonly { readonly cx: number; readonly cy: number; readonly edgeCount: number }[],
+  m: ManifestDTO,
+  area: StudyArea,
+): number => {
+  const wanted = new Set(chunksInArea(m, area))
+  return chunks.filter((c) => wanted.has(chunkKey(c.cx, c.cy))).reduce((n, c) => n + c.edgeCount, 0)
+}
+
+/**
+ * Seconds for one assignment hour, fitted to the two `twin-bench` figures for
+ * the wasm solver: ~1.0 s at 36k edges and ~83 s at 165k. That is an exponent
+ * near 2.9, so the cost is close to cubic in the edge count — which is why the
+ * app opens on a block rather than the county.
+ */
+const REF_EDGES = 36_000
+const REF_SECONDS = 1.0
+const COST_EXPONENT = 2.9
+
+export const estimatedHourSeconds = (edges: number): number =>
+  edges <= 0 ? 0 : REF_SECONDS * (edges / REF_EDGES) ** COST_EXPONENT
+
+/** Past this the UI warns before committing to a run. */
+export const HEAVY_AREA_EDGES = 60_000

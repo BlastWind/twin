@@ -3,7 +3,8 @@ import { defaultVisibility, type LayerId, type LayerVisibility } from '../map/la
 import type { ChunkGeometryDTO, ChunkKey, EdgeId, HourResultDTO, Hour, ResultKind, ScenarioDTO, StatsDTO, WorkerErrorDTO } from '../sim/protocol'
 import { EMPTY_SCENARIO } from '../sim/protocol'
 import type { ManifestDTO, StudyArea } from '../graph/manifest'
-import { WHOLE_COUNTY } from '../graph/manifest'
+import { DEFAULT_STUDY_AREA } from '../graph/manifest'
+import type { ChunkEntrySchema } from '../graph/schema'
 import { EMPTY_CACHE, EMPTY_ORDER, edgeOrder, putHour, type EdgeOrder, type ResultCache } from './resultCache'
 
 /** DESIGN 7.3 — four stores, one concern each. */
@@ -12,6 +13,8 @@ export type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 
 export type WorldState = {
   readonly manifest: ManifestDTO | null
+  /** index.bin's chunk table: per-cell node/edge counts, for costing an area. */
+  readonly index: readonly ChunkEntrySchema[] | null
   readonly load: LoadState
   readonly stats: StatsDTO | null
   readonly error: WorkerErrorDTO | null
@@ -19,6 +22,7 @@ export type WorldState = {
   readonly geometry: ReadonlyMap<ChunkKey, ChunkGeometryDTO>
   readonly order: EdgeOrder
   setManifest: (m: ManifestDTO) => void
+  setIndex: (chunks: readonly ChunkEntrySchema[]) => void
   setLoad: (load: LoadState) => void
   setStats: (stats: StatsDTO) => void
   setError: (error: WorkerErrorDTO | null) => void
@@ -29,12 +33,14 @@ export type WorldState = {
 
 export const useWorldStore = create<WorldState>((set) => ({
   manifest: null,
+  index: null,
   load: 'idle',
   stats: null,
   error: null,
   geometry: new Map(),
   order: EMPTY_ORDER,
   setManifest: (manifest) => set({ manifest }),
+  setIndex: (index) => set({ index }),
   setLoad: (load) => set({ load }),
   setStats: (stats) => set({ stats, load: 'ready' }),
   setError: (error) => set({ error, load: error ? 'error' : 'ready' }),
@@ -142,7 +148,7 @@ export const useUiStore = create<UiState>((set) => ({
   layers: defaultVisibility(),
   overlay: true,
   devOverlay: true,
-  studyArea: WHOLE_COUNTY,
+  studyArea: DEFAULT_STUDY_AREA,
   drawing: false,
   hover: null,
   selected: null,

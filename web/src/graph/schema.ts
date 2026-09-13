@@ -161,8 +161,11 @@ export type GraphIndexSchema = {
   readonly chunks: readonly ChunkEntrySchema[]
 }
 
+/** `min_lon,min_lat,max_lon,max_lat,cell_lon,cell_lat` as f64 then `cols,rows` as u32. */
+const GRID_BYTES = 56
+
 const decodeGrid = (f: FileView): GridSchema => {
-  const raw = section(f, SectionKind.Grid, Uint8Array, 64)
+  const raw = section(f, SectionKind.Grid, Uint8Array, GRID_BYTES)
   const dv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength)
   return {
     minLon: dv.getFloat64(0, true),

@@ -9,6 +9,7 @@ export type LoadStage =
   | 'manifest'
   | 'index'
   | 'chunks'
+  | 'demand'
   | 'first-baseline'
   | 'overlay-ready'
 
