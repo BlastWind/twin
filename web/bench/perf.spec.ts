@@ -108,11 +108,24 @@ const measureFps = async (page: Page, zoom: number): Promise<number> => {
 /**
  * Software GL in CI is noisy; take the best of a few passes (the first pass
  * also warms the tile cache and shaders) so the 15% threshold is meaningful.
+ *
+ * A pass that overruns is abandoned rather than allowed to eat the whole test
+ * budget: on a loaded box a single scripted leg can take minutes, and losing
+ * one fps number is much cheaper than losing every metric in the run.
  */
+const FPS_PASS_BUDGET_MS = 30_000
+
 const bestFps = async (page: Page, zoom: number, passes = 3): Promise<number> => {
   const runs: number[] = []
-  for (let i = 0; i < passes; i += 1) runs.push(await measureFps(page, zoom))
-  return Math.max(...runs)
+  for (let i = 0; i < passes; i += 1) {
+    const run = await Promise.race([
+      measureFps(page, zoom),
+      new Promise<null>((r) => setTimeout(() => r(null), FPS_PASS_BUDGET_MS)),
+    ])
+    if (run === null) break
+    runs.push(run)
+  }
+  return runs.length > 0 ? Math.max(...runs) : Number.NaN
 }
 
 /** CDP heap usage: exact, unlike the quantized `performance.memory`. */
@@ -151,7 +164,7 @@ test('browser perf harness', async ({ page }) => {
   const heapAfterLoad = await heapBytes(session)
   await wait24h(page)
 
-  const results: Results = {
+  const loadMetrics: Results = {
     firstPaintMs: Number(firstPaintMs.toFixed(1)),
     firstTileMs: Number((await markMs(page, 'first-tile')).toFixed(1)),
     mapIdleMs: Number((await markMs(page, 'map-idle')).toFixed(1)),
@@ -162,8 +175,19 @@ test('browser perf harness', async ({ page }) => {
     transferBytes,
     workerMessageBytes: await gauge(page, 'workerMessageBytes'),
     overlayPaths: await gauge(page, 'overlayPaths'),
-    // fps below is measured with the result overlay on, which is the state the
-    // app actually runs in from here on
+    fpsZ11: Number.NaN,
+    fpsZ13: Number.NaN,
+    fpsZ15: Number.NaN,
+  }
+
+  // Land the load metrics before the expensive part: if the fps passes overrun
+  // or the page dies under them, the run still leaves something behind.
+  writeJson(RESULTS, loadMetrics)
+
+  const results: Results = {
+    ...loadMetrics,
+    // fps is measured with the result overlay on, which is the state the app
+    // actually runs in from here on
     fpsZ11: await bestFps(page, 11),
     fpsZ13: await bestFps(page, 13),
     fpsZ15: await bestFps(page, 15),
