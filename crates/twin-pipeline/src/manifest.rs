@@ -136,7 +136,11 @@ impl ManifestDTO {
     }
 }
 
+/// Container-level `default` so a manifest written before a schema was added
+/// still parses; the missing versions come from [`Default`], which is the
+/// current constants, and every stage rewrites the block anyway.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SchemaVersionsDTO {
     pub index: u32,
     pub chunk: u32,

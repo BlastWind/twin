@@ -229,6 +229,7 @@ fn ingest_gis(cfg: &PipelineConfig) -> Result<()> {
     }
     let man_path = cfg.out_dir.join("manifest.json");
     let mut man = ManifestDTO::load(&man_path)?;
+    man.schema = SchemaVersionsDTO::default();
     man.upsert_stages(stages);
     man.gis = Some(GisInfoDTO {
         layers: out
