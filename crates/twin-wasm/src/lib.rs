@@ -9,13 +9,13 @@
 mod transit;
 
 use serde::{Deserialize, Serialize};
-use twin_core::assign::{assign, AssignParams, HourResult};
+use twin_core::assign::{assign, AssignPlan, HourResult, Loader, Zoning};
 use twin_core::demand::DemandSchema;
 use twin_core::graph_schema::GraphChunkSchema;
 use twin_core::schema::AlignedBytes;
 use twin_core::{
-    CchOrderSchema, ChunkEntrySchema, ChunkId, EdgeId, GraphIndexSchema, GridSchema, Hour,
-    RoadGraph, Scenario, ScenarioView,
+    restrict_order, CchOrderSchema, ChunkEntrySchema, ChunkId, EdgeId, GraphIndexSchema,
+    GridSchema, Hour, RoadGraph, Scenario, ScenarioView,
 };
 use wasm_bindgen::prelude::*;
 
@@ -42,6 +42,31 @@ pub struct StatsDTO {
 pub struct ScenarioDTO {
     #[serde(default)]
     pub edits: Vec<EditDTO>,
+    /// How finely the demand loads. Additive and defaulted, so a scenario
+    /// written before this existed still parses.
+    #[serde(default)]
+    pub zones: ZonesDTO,
+}
+
+/// The zoning choice as the UI spells it.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ZonesDTO {
+    /// Every block group loads at its own centroid.
+    #[default]
+    Full,
+    /// Block groups merge to a few hundred loading points. County-scale runs
+    /// want this; it is what keeps the hour inside the frame budget.
+    Coarse,
+}
+
+impl From<ZonesDTO> for Zoning {
+    fn from(z: ZonesDTO) -> Self {
+        match z {
+            ZonesDTO::Full => Self::Full,
+            ZonesDTO::Coarse => Self::coarse(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -66,6 +91,11 @@ pub enum EditDTO {
         lanes: Option<u8>,
         #[serde(default)]
         speed_mps: Option<f32>,
+        #[serde(default)]
+        capacity_vph: Option<f32>,
+        /// `[[lon, lat], ...]` along the new link, as the editor drew it.
+        #[serde(default)]
+        geometry: Vec<[f32; 2]>,
     },
 }
 
@@ -98,6 +128,8 @@ impl TryFrom<ScenarioDTO> for Scenario {
                     to,
                     lanes,
                     speed_mps,
+                    capacity_vph,
+                    geometry,
                 } => {
                     let (Some(from), Some(to)) =
                         (twin_core::NodeId::new(from), twin_core::NodeId::new(to))
@@ -109,6 +141,8 @@ impl TryFrom<ScenarioDTO> for Scenario {
                         to,
                         lanes: lanes.unwrap_or(1),
                         speed_mps: speed_mps.unwrap_or(11.0),
+                        capacity_vph,
+                        geometry,
                     })
                 }
             })
@@ -145,10 +179,24 @@ pub struct TwinWorld {
     entries: Vec<ChunkEntrySchema>,
     graph: RoadGraph,
     demand: Option<AlignedBytes>,
-    /// Contraction order in global node ids. Held for the skim queries; the
-    /// equilibrium loop grows its own shortest-path trees.
+    /// Contraction order in global node ids, as `cch_order.bin` stores it.
+    /// Restricted to the loaded study area whenever the hierarchy is rebuilt.
     cch_rank: Vec<u32>,
+    /// The hierarchy and solver knobs, kept across runs: building it costs
+    /// ~100 ms on the county and nothing about it depends on the hour.
+    solver: Option<Solver>,
     last: Option<LastRun>,
+}
+
+/// A built solver plan and the study area it was built for. A hierarchy over a
+/// different node set is not merely slow, it is wrong, so the node count is
+/// carried alongside and checked.
+struct Solver {
+    plan: AssignPlan,
+    /// `(nodes, edges)` of the view it was built for. A scenario that adds a
+    /// link changes the arc set, so the hierarchy is rebuilt rather than
+    /// silently answering for the graph without it.
+    shape: (usize, usize),
 }
 
 /// The previous run, kept so the next hour can warm-start from it and so
@@ -245,6 +293,7 @@ impl TwinWorld {
             .ok_or_else(|| JsError::new(&format!("hour {hour} is outside 0..24")))?;
         let dto: ScenarioDTO = serde_json::from_str(scenario_json)
             .map_err(|e| JsError::new(&format!("scenario JSON: {e}")))?;
+        let dto_zones = dto.zones;
         let scenario: Scenario = dto.try_into().map_err(js_err)?;
         let demand_bytes = self
             .demand
@@ -262,13 +311,22 @@ impl TwinWorld {
         for w in &warnings {
             web_sys_warn(w);
         }
-        let result = assign(
-            &view,
-            &demand,
-            hour,
-            warm.as_deref(),
-            &AssignParams::default(),
-        );
+
+        let shape = (view.node_count(), view.edge_count());
+        let stale = self.solver.as_ref().is_none_or(|s| s.shape != shape);
+        if stale {
+            let loader = match self.cch_rank.is_empty() {
+                true => Loader::Dijkstra,
+                false => Loader::cch(&view, &restrict_order(&view, &self.cch_rank)),
+            };
+            self.solver = Some(Solver {
+                plan: AssignPlan::new(loader),
+                shape,
+            });
+        }
+        let plan = &mut self.solver.as_mut().expect("just built").plan;
+        plan.zones = dto_zones.into();
+        let result = assign(&view, &demand, hour, warm.as_deref(), plan);
 
         // Global-id order, so the caller can join against `loadedEdgeIds`
         // without knowing anything about chunk assembly.

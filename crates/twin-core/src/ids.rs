@@ -64,6 +64,20 @@ magic_id!(
     EdgeId,
     "Globally stable directed-edge id, unique across all chunks."
 );
+impl EdgeId {
+    /// First id handed to a scenario's added edges. The pipeline numbers base
+    /// edges from 0 and the county is four orders of magnitude short of this,
+    /// so an overlay id can never collide with a real one — and a result array
+    /// carrying one is recognisably not a road that exists.
+    pub const OVERLAY_START: u32 = 0xF000_0000;
+
+    /// Whether this id names an edge a scenario added rather than a base edge.
+    #[inline]
+    pub const fn is_overlay(self) -> bool {
+        self.raw() >= Self::OVERLAY_START
+    }
+}
+
 magic_id!(
     ChunkId,
     "Linear id of a grid cell: `cy * cols + cx`. See [`crate::grid::ChunkGrid`]."

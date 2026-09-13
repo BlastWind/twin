@@ -134,6 +134,11 @@ impl Skim {
     pub fn node_count(&self) -> usize {
         self.cch.node_count()
     }
+
+    /// Arcs the hierarchy was built over, in the caller's dense edge numbering.
+    pub fn arc_count(&self) -> usize {
+        self.edge_of_arc.len()
+    }
 }
 
 /// Distances from one source to *every* node, plus the shortest-path tree over

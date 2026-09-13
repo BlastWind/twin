@@ -340,3 +340,58 @@ fn widening_a_route_attracts_traffic() {
     let after = volume_of(&vols, &pairs, 0, 1);
     assert!(after > before * 1.2, "{before} -> {after}");
 }
+
+/// Braess again, from the other side: the network is built *without* the
+/// shortcut and the scenario adds it. The added link has to attract every trip
+/// and make the hour worse, exactly as closing it made the hour better.
+#[test]
+fn an_added_link_reproduces_braess() {
+    let hour = Hour::from_index(8);
+    let q = 4000.0f32;
+    let edges = vec![
+        arc(0, 1, 1.0, 1000.0),
+        arc(2, 3, 1.0, 1000.0),
+        arc(0, 2, 45.0, 1.0e9),
+        arc(1, 3, 45.0, 1.0e9),
+    ];
+    let mut n = net(4, edges, &[(0, 3, q / (1.0 - return_share(hour)))]);
+    let load = effective(q / (1.0 - return_share(hour)), hour);
+
+    let (_, _, without) = run(&mut n, &Scenario::empty(), hour);
+
+    // A degenerate geometry, which the overlay floors at one metre: the
+    // paradox needs the new link to be nearly free, and the test's nodes are
+    // ~90 m apart, which at any sane speed is not. A huge capacity keeps it
+    // free however much piles on.
+    let here = [tiny_bbox().west as f32, tiny_bbox().south as f32];
+    let scenario = Scenario {
+        edits: vec![Edit::AddEdge {
+            from: NodeId::from_index(1),
+            to: NodeId::from_index(2),
+            lanes: 1,
+            speed_mps: 10.0,
+            capacity_vph: Some(1.0e9),
+            geometry: vec![here, here],
+        }],
+    };
+    let (vols, pairs, with) = run(&mut n, &scenario, hour);
+    let shortcut = volume_of(&vols, &pairs, 1, 2);
+    assert!(
+        (shortcut - load).abs() / load < 0.01,
+        "everyone takes the added link: {shortcut} of {load}"
+    );
+    assert!(
+        with.kpis.vht > without.kpis.vht,
+        "adding the link costs vehicle-hours: {} vs {}",
+        with.kpis.vht,
+        without.kpis.vht
+    );
+    let added: Vec<EdgeId> = with
+        .kpis
+        .top_edges
+        .iter()
+        .map(|&(id, _)| id)
+        .filter(|id| id.is_overlay())
+        .collect();
+    assert_eq!(added.len(), 1, "the overlay edge reports under a reserved id");
+}

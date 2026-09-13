@@ -472,10 +472,15 @@ impl Loader {
         Self::Cch(Box::new(Skim::build(view, order)))
     }
 
+    /// Whether this loader was built for exactly this view. An added edge
+    /// changes the arc set the hierarchy was contracted over, so the structure
+    /// has to be rebuilt — cheap next to a run, and the only correct answer.
     fn fits(&self, view: &ScenarioView<'_>) -> bool {
         match self {
             Self::Dijkstra => true,
-            Self::Cch(skim) => skim.node_count() == view.node_count(),
+            Self::Cch(skim) => {
+                skim.node_count() == view.node_count() && skim.arc_count() == view.edge_count()
+            }
         }
     }
 }
