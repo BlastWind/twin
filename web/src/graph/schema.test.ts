@@ -136,13 +136,34 @@ describe('chunk decoder', () => {
 const REAL = resolve(import.meta.dirname, '../../../data/build/graph/chunk_10_10.bin')
 
 describe.skipIf(!existsSync(REAL))('chunk decoder on real pipeline output', () => {
-  it('decodes a county chunk', () => {
+  const load = () => {
     const file = readFileSync(REAL)
-    const c = decodeChunk(file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength) as ArrayBuffer)
+    return decodeChunk(file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength) as ArrayBuffer)
+  }
+
+  it('decodes a county chunk', () => {
+    const c = load()
     expect(c.meta.edgeCount).toBeGreaterThan(0)
     expect(c.edgeGid.length).toBe(c.meta.edgeCount)
     expect(c.outOffsets.length).toBe(c.meta.nodeCount + 1)
     const g = edgeGeometry(c, 0 as LocalEdgeIx)
     expect(g.length).toBeGreaterThanOrEqual(4)
+  })
+
+  /**
+   * The pipeline bumped the chunk schema to v2 mid-flight. This asserts the
+   * decoder picked the new sections up off the table without a code change,
+   * and that what it yields is real road shape rather than the straight-line
+   * fallback.
+   */
+  it('reads the v2 polylines the pipeline now emits', () => {
+    const c = load()
+    expect(c.version).toBeGreaterThanOrEqual(2)
+    expect(c.geomOffsets).toBeDefined()
+    expect(c.geomOffsets?.length).toBe(c.meta.edgeCount + 1)
+    const bent = Array.from({ length: c.meta.edgeCount }, (_, i) => edgeGeometry(c, i as LocalEdgeIx).length).filter(
+      (n) => n > 4,
+    ).length
+    expect(bent).toBeGreaterThan(0)
   })
 })
