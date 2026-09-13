@@ -101,7 +101,11 @@ CRASH_YEAR_MIN="$(( $(date +%Y) - 3 ))"
 # resume check makes an overlap harmless rather than corrupting a page.
 arcgis_dump() {
   local name="$1" url="$2" where="$3" clip="${4:-yes}"
-  if [[ -n "${TWIN_GIS_LAYERS:-}" && " $TWIN_GIS_LAYERS " != *" $name "* ]]; then
+  # A sharded layer is selected by its base name: `parcel_geom` picks up
+  # `parcel_geom_0` through `parcel_geom_13`.
+  local base="${name%_[0-9]*}"
+  if [[ -n "${TWIN_GIS_LAYERS:-}" ]] \
+     && [[ " $TWIN_GIS_LAYERS " != *" $name "* && " $TWIN_GIS_LAYERS " != *" $base "* ]]; then
     return 0
   fi
   local dir="$GIS_DIR/$name"
@@ -174,7 +178,8 @@ if [[ "${TWIN_SKIP_GIS:-0}" != "1" ]]; then
   # 370 000 polygons is the slowest layer by far, so it is sharded on
   # OBJECTID and the shards are paged in parallel; ingest-gis reads
   # parcel_geom_* as one layer.
-  for shard in 0 1 2 3; do
+  # OBJECTID runs to about 1.36 M with gaps, so the shards cover 0 .. 1.4 M.
+  for shard in $(seq 0 13); do
     lo=$(( shard * 100000 ))
     hi=$(( lo + 100000 ))
     arcgis_layer "parcel_geom_$shard" "$PARCEL_GEOM_URL" \
