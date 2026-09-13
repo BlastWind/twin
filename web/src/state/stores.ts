@@ -309,4 +309,5 @@ Object.assign(globalThis, {
   __twinWorld: useWorldStore,
   __twinCalibration: useCalibrationStore,
   __twinScenario: useScenarioStore,
+  __twinSim: useSimStore,
 })

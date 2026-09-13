@@ -305,6 +305,8 @@ let active: SimClient | null = null
 
 export const setSimClient = (client: SimClient | null): void => {
   active = client
+  // the perf harness drives the study area from outside React
+  Object.assign(globalThis, { __twinClient: client })
 }
 
 export const getSimClient = (): SimClient | null => active
