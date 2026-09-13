@@ -39,8 +39,10 @@ export const scenarioJson = (s: ScenarioDTO): string => JSON.stringify({ edits: 
 
 // ------------------------------------------------------------------ real wasm
 
-const WASM_JS = '/wasm/twin_wasm.js'
-const WASM_BG = '/wasm/twin_wasm_bg.wasm'
+// Absolute URLs: Vite's dev server rejects root-relative imports of /public
+// assets, but leaves a full URL alone. wasm-pack output is served as-is.
+const WASM_JS = new URL('/wasm/twin_wasm.js', self.location.origin).href
+const WASM_BG = new URL('/wasm/twin_wasm_bg.wasm', self.location.origin).href
 
 /**
  * The Phase-1 module exposed a `TwinWorld` class; Phase 2 adds the solver
