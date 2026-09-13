@@ -7,3 +7,7 @@ bench/results.json
 test-results/
 playwright-report/
 *.tsbuildinfo
+public/data/graph
+public/data/manifest.json
+public/data/demand.bin
+public/data/cch_order.bin

@@ -1,7 +1,7 @@
 //! The pipeline's in-memory graph before it is cut into chunks, plus the two
 //! pure transforms that act on it: degree-2 simplification and partitioning.
 
-use crate::graph_schema::{ChunkBuild, ChunkEdge, ChunkEntrySchema, ChunkNode};
+use crate::graph_schema::{ChunkBuild, ChunkEdge, ChunkEntrySchema, ChunkNode, GeomCsr};
 use crate::grid::{haversine_m, GridSchema};
 use crate::ids::{ChunkId, EdgeId, NodeId, RoadClass};
 use std::collections::HashMap;
@@ -59,13 +59,30 @@ impl RawEdge {
     }
 }
 
+/// One directed edge's polyline in lon/lat, tail-node-first, both endpoints
+/// included.
+pub type Polyline = Vec<[f32; 2]>;
+
 #[derive(Clone, Debug, Default)]
 pub struct RawGraph {
     pub nodes: Vec<RawNode>,
     pub edges: Vec<RawEdge>,
+    /// Parallel to `edges`. Kept beside the edge rows rather than inside
+    /// [`RawEdge`] so an edge row stays `Copy`.
+    pub geom: Vec<Polyline>,
 }
 
 impl RawGraph {
+    /// The graph whose every edge is drawn as the straight segment between its
+    /// endpoints — the shape an unsimplified OSM segment already has.
+    pub fn new(nodes: Vec<RawNode>, edges: Vec<RawEdge>) -> Self {
+        let geom = edges
+            .iter()
+            .map(|e| vec![point(&nodes[e.from as usize]), point(&nodes[e.to as usize])])
+            .collect();
+        Self { nodes, edges, geom }
+    }
+
     /// An `n * n` lattice spread evenly across `bbox`, both directions on every
     /// arc, so `E = 4n(n-1)`. Used by the benches and by `--synthetic-grid` so
     /// everything is testable without a PBF.
@@ -102,8 +119,14 @@ impl RawGraph {
                 }
             }
         }
-        Self { nodes, edges }
+        Self::new(nodes, edges)
     }
+}
+
+/// A node as a serialized polyline point.
+#[inline]
+fn point(n: &RawNode) -> [f32; 2] {
+    [n.lon as f32, n.lat as f32]
 }
 
 /// Collapse chains of degree-2 nodes into single edges.
@@ -138,7 +161,7 @@ pub fn simplify_degree2(graph: &RawGraph) -> RawGraph {
         .collect();
 
     // Walk each chain from a non-collapsible seed and emit the merged edges.
-    let mut merged: Vec<RawEdge> = Vec::new();
+    let mut merged: Vec<(RawEdge, Polyline)> = Vec::new();
     let mut visited = vec![false; n];
     let has_edge: HashMap<(u32, u32), u32> = graph
         .edges
@@ -183,18 +206,20 @@ pub fn simplify_degree2(graph: &RawGraph) -> RawGraph {
         .enumerate()
         .map(|(i, &v)| (v, i as u32))
         .collect();
-    let nodes = keep.iter().map(|&v| graph.nodes[v as usize]).collect();
-    let edges = graph
+    let nodes: Vec<RawNode> = keep.iter().map(|&v| graph.nodes[v as usize]).collect();
+    let survivors = graph
         .edges
         .iter()
-        .chain(merged.iter())
-        .filter_map(|e| {
+        .zip(graph.geom.iter())
+        .chain(merged.iter().map(|(e, g)| (e, g)));
+    let (edges, geom): (Vec<RawEdge>, Vec<Polyline>) = survivors
+        .filter_map(|(e, g)| {
             let from = *remap.get(&e.from)?;
             let to = *remap.get(&e.to)?;
-            (from != to).then_some(RawEdge { from, to, ..*e })
+            (from != to).then(|| (RawEdge { from, to, ..*e }, g.clone()))
         })
-        .collect();
-    RawGraph { nodes, edges }
+        .unzip();
+    RawGraph { nodes, edges, geom }
 }
 
 /// Follow collapsible nodes from `start` through `first` until a
@@ -223,7 +248,7 @@ fn merge_chain(
     chain: &[u32],
     has_edge: &HashMap<(u32, u32), u32>,
     graph: &RawGraph,
-) -> Option<RawEdge> {
+) -> Option<(RawEdge, Polyline)> {
     let arcs: Option<Vec<&RawEdge>> = chain
         .windows(2)
         .map(|w| {
@@ -234,12 +259,19 @@ fn merge_chain(
         .collect();
     let arcs = arcs?;
     let first = *arcs.first()?;
-    Some(RawEdge {
+    let fused = RawEdge {
         from: chain[0],
         to: chain[chain.len() - 1],
         len_m: arcs.iter().map(|e| e.len_m).sum(),
         ..*first
-    })
+    };
+    // The fused shape is the chain itself: every node it swallowed becomes an
+    // interior polyline point, so nothing is lost visually by simplification.
+    let line = chain
+        .iter()
+        .map(|&v| point(&graph.nodes[v as usize]))
+        .collect();
+    Some((fused, line))
 }
 
 /// Output of [`partition`]: the index rows and the chunk payloads, both in
@@ -371,6 +403,12 @@ fn build_chunk(
     for &v in owned {
         intern(v, &mut nodes, &mut local_of);
     }
+    let geom = GeomCsr::from_polylines(
+        &edge_ids
+            .iter()
+            .map(|&i| graph.geom[i as usize].clone())
+            .collect::<Vec<_>>(),
+    );
     let edges = edge_ids
         .iter()
         .map(|&i| {
@@ -387,5 +425,5 @@ fn build_chunk(
             }
         })
         .collect();
-    (ChunkBuild::new(chunk, nodes, edges), local_of)
+    (ChunkBuild::new(chunk, nodes, edges, geom), local_of)
 }

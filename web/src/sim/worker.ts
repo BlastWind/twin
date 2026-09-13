@@ -1,82 +1,28 @@
 /// <reference lib="webworker" />
+import { decodeChunk } from '../graph/schema'
+import type { ChunkKey } from '../graph/manifest'
 import {
   decodeRequest,
   encodeResponse,
-  type ChunkId,
+  type ChunkGeometryDTO,
   type HourResultDTO,
+  type Hour,
+  type KpiDTO,
   type RequestDTO,
   type ResponseDTO,
+  type ResultKind,
   type RunRequestDTO,
   type StatsDTO,
   type WorkerErrorDTO,
+  type EdgeId,
 } from './protocol'
+import { createStubSolver, loadWasmSolver, scenarioJson, type KpiJsonDTO, type SolverApi } from './wasmApi'
 
 /**
- * Sim worker. Uses the real wasm core when `public/wasm/twin_wasm.js` exists
- * (built by the Rust track), otherwise a deterministic stub so the whole
- * pipeline — codec, stores, overlay — is exercisable today.
+ * Sim worker: owns the solver, the chunk residency set and the per-hour result
+ * cache. Only the *selected* hour ever crosses back to the main thread; the
+ * other 23 stay here (DESIGN 6, ~120 MB at county scale).
  */
-
-type WasmCore = {
-  load_index: (bytes: Uint8Array) => void
-  load_chunk: (id: string, bytes: Uint8Array) => void
-  free_chunk: (id: string) => void
-  stats: () => { nodes: number; edges: number; chunks_loaded: number; wasm_bytes: number }
-}
-
-type Backend =
-  | { readonly kind: 'wasm'; readonly core: WasmCore }
-  | { readonly kind: 'stub'; readonly chunks: Set<ChunkId>; edges: number; nodes: number }
-
-const WASM_URL = '/wasm/twin_wasm.js'
-
-const loadWasm = async (): Promise<Backend> => {
-  try {
-    const head = await fetch(WASM_URL, { method: 'HEAD' })
-    if (!head.ok) throw new Error(`no wasm (${head.status})`)
-    const mod = (await import(/* @vite-ignore */ WASM_URL)) as { default: (u?: string) => Promise<unknown> } & WasmCore
-    await mod.default('/wasm/twin_wasm_bg.wasm')
-    return { kind: 'wasm', core: mod }
-  } catch {
-    return { kind: 'stub', chunks: new Set<ChunkId>(), edges: 0, nodes: 0 }
-  }
-}
-
-const statsOf = (b: Backend): StatsDTO =>
-  b.kind === 'wasm'
-    ? (() => {
-        const s = b.core.stats()
-        return { nodes: s.nodes, edges: s.edges, chunksLoaded: s.chunks_loaded, wasmBytes: s.wasm_bytes, backend: 'wasm' as const }
-      })()
-    : { nodes: b.nodes, edges: b.edges, chunksLoaded: b.chunks.size, wasmBytes: 0, backend: 'stub' as const }
-
-/** Deterministic fake flows so the overlay has plausible data before the core lands. */
-const fakeHourResult = (req: RunRequestDTO, h: number, edges: number): HourResultDTO => {
-  const volume = new Float32Array(edges)
-  const vc = new Float32Array(edges)
-  const delay = new Float32Array(edges)
-  const peak = 1 - Math.abs(h - 8) / 12
-  let vmt = 0
-  let vht = 0
-  for (let i = 0; i < edges; i += 1) {
-    const base = ((i * 2654435761) % 1000) / 1000
-    const v = base * 1800 * Math.max(peak, 0.1)
-    const ratio = v / 1600
-    volume[i] = v
-    vc[i] = ratio
-    delay[i] = 15 * ratio ** 4
-    vmt += v * 0.2
-    vht += (v * 0.2) / 45
-  }
-  return {
-    id: req.id,
-    hour: h as HourResultDTO['hour'],
-    volume,
-    vc,
-    delay,
-    kpis: { vmt, vht, meanDelayS: edges ? delay.reduce((a, b) => a + b, 0) / edges : 0, maxVc: vc.length ? Math.max(...vc) : 0 },
-  }
-}
 
 const post = (res: ResponseDTO): void => {
   const { message, transfer } = encodeResponse(res)
@@ -89,58 +35,144 @@ const errorOf = (code: WorkerErrorDTO['code'], e: unknown, seq: number): Respons
   payload: { code, message: e instanceof Error ? e.message : String(e), requestId: seq },
 })
 
-const cancelled = new Set<number>()
+/** One run's 24 slots; each is the raw `[volume | vc | delay]` block plus its KPIs. */
+type HourCell = { readonly raw: Float32Array; readonly kpis: KpiDTO }
+type ResultCache = Map<Hour, HourCell>
 
-const handle = (backend: Backend, req: RequestDTO): void => {
-  switch (req.type) {
-    case 'load-index': {
-      if (backend.kind === 'wasm') backend.core.load_index(new Uint8Array(req.payload.index))
-      else backend.nodes = Math.max(backend.nodes, req.payload.index.byteLength >> 4)
-      post({ type: 'ack', seq: req.seq, payload: { ok: true } })
-      return
-    }
-    case 'load-chunk': {
-      if (backend.kind === 'wasm') backend.core.load_chunk(req.payload.chunk, new Uint8Array(req.payload.bytes))
-      else {
-        backend.chunks.add(req.payload.chunk)
-        backend.edges += req.payload.bytes.byteLength >> 5
-      }
-      post({ type: 'ack', seq: req.seq, payload: { ok: true } })
-      return
-    }
-    case 'free-chunk': {
-      if (backend.kind === 'wasm') backend.core.free_chunk(req.payload.chunk)
-      else backend.chunks.delete(req.payload.chunk)
-      post({ type: 'ack', seq: req.seq, payload: { ok: true } })
-      return
-    }
-    case 'stats': {
-      post({ type: 'stats', seq: req.seq, payload: statsOf(backend) })
-      return
-    }
-    case 'cancel': {
-      cancelled.add(req.payload.id)
-      post({ type: 'ack', seq: req.seq, payload: { ok: true } })
-      return
-    }
-    case 'run': {
-      const edges = statsOf(backend).edges || 20_000
-      req.payload.hours
-        .filter(() => !cancelled.has(req.payload.id))
-        .forEach((h) => post({ type: 'hour-result', seq: req.seq, payload: fakeHourResult(req.payload, h, edges) }))
-      post({ type: 'run-done', seq: req.seq, payload: { id: req.payload.id } })
-      return
-    }
+const caches: Record<ResultKind, ResultCache> = { baseline: new Map(), scenario: new Map() }
+
+const parseKpis = (json: string): KpiDTO => {
+  const k = JSON.parse(json) as KpiJsonDTO
+  return {
+    vmt: k.vmt,
+    vht: k.vht,
+    meanDelayS: k.mean_delay_s,
+    topEdges: (k.top_edges ?? []).map((t) => ({ edge: t.edge_id as EdgeId, vc: t.vc })),
   }
 }
 
-void loadWasm().then((backend) => {
-  post({ type: 'ready', seq: 0, payload: statsOf(backend) })
-  self.onmessage = (ev: MessageEvent<unknown>) => {
-    try {
-      handle(backend, decodeRequest(ev.data))
-    } catch (e) {
-      post(errorOf('run-failed', e, -1))
-    }
+const hourResult = (id: RunRequestDTO['id'], kind: ResultKind, h: Hour, cell: HourCell): HourResultDTO => {
+  const n = cell.raw.length / 3
+  return {
+    id,
+    kind,
+    hour: h,
+    volume: cell.raw.slice(0, n),
+    vc: cell.raw.slice(n, 2 * n),
+    delay: cell.raw.slice(2 * n, 3 * n),
+    kpis: cell.kpis,
   }
-})
+}
+
+/**
+ * Chunk geometry in deck.gl's binary path shape. Edges below the major classes
+ * are dropped at low zoom on the main thread, so both arrays ship once and the
+ * per-hour update touches only the colour attribute.
+ */
+const geometryOf = (chunk: ChunkKey, bytes: ArrayBuffer): ChunkGeometryDTO => {
+  const c = decodeChunk(bytes)
+  const e = c.meta.edgeCount
+  const counts = Array.from({ length: e }, (_, i) =>
+    c.geomOffsets ? c.geomOffsets[i + 1] - c.geomOffsets[i] : 2,
+  ).map((n) => (n >= 2 ? n : 2))
+  const total = counts.reduce((a, b) => a + b, 0)
+  const positions = new Float32Array(total * 2)
+  const startIndices = new Uint32Array(e + 1)
+  let at = 0
+  for (let i = 0; i < e; i += 1) {
+    startIndices[i] = at
+    if (c.geomOffsets && c.geomLonLat && counts[i] > 2) {
+      positions.set(c.geomLonLat.subarray(c.geomOffsets[i] * 2, c.geomOffsets[i + 1] * 2), at * 2)
+    } else {
+      const f = c.edgeFrom[i] * 2
+      const t = c.edgeTo[i] * 2
+      positions.set([c.nodeLonLat[f], c.nodeLonLat[f + 1], c.nodeLonLat[t], c.nodeLonLat[t + 1]], at * 2)
+    }
+    at += counts[i]
+  }
+  startIndices[e] = at
+  return { chunk, edges: c.edgeGid.slice(), classes: c.edgeClass.slice(), positions, startIndices }
+}
+
+const statsOf = (solver: SolverApi): StatsDTO => ({ ...solver.stats(), backend: solver.kind })
+
+const cancelled = new Set<number>()
+
+/**
+ * Runs the requested hours one message-loop turn apart so the worker stays
+ * responsive to `select-hour` while the background 23 finish. The first hour is
+ * posted; the rest are cached.
+ */
+const runHours = (solver: SolverApi, req: RunRequestDTO): void => {
+  const json = scenarioJson(req.scenario)
+  const cache = caches[req.kind]
+  cache.clear()
+  post({ type: 'edge-order', seq: 0, payload: { edges: solver.loadedEdgeIds().slice() } })
+  const queue = [...req.hours]
+  const step = (): void => {
+    if (cancelled.has(req.id) || queue.length === 0) {
+      post({ type: 'run-done', seq: 0, payload: { id: req.id, kind: req.kind } })
+      return
+    }
+    const h = queue.shift() as Hour
+    const raw = solver.runHour(json, h)
+    const cell: HourCell = { raw: raw.slice(), kpis: parseKpis(solver.kpisJson()) }
+    cache.set(h, cell)
+    post({ type: 'hour-result', seq: 0, payload: hourResult(req.id, req.kind, h, cell) })
+    setTimeout(step, 0)
+  }
+  step()
+}
+
+const handle = (solver: SolverApi, req: RequestDTO): void => {
+  switch (req.type) {
+    case 'load-index':
+      solver.loadIndex(new Uint8Array(req.payload.index))
+      return post({ type: 'ack', seq: req.seq, payload: { ok: true } })
+    case 'load-chunk': {
+      const { chunk, chunkIx, bytes } = req.payload
+      post({ type: 'chunk-geometry', seq: req.seq, payload: geometryOf(chunk, bytes) })
+      solver.loadChunk(chunkIx, new Uint8Array(bytes))
+      return post({ type: 'ack', seq: req.seq, payload: { ok: true } })
+    }
+    case 'free-chunk':
+      req.payload.chunks.forEach((c) => solver.freeChunk(c.chunkIx))
+      return post({ type: 'ack', seq: req.seq, payload: { ok: true } })
+    case 'load-demand':
+      solver.loadDemand(new Uint8Array(req.payload.bytes))
+      return post({ type: 'ack', seq: req.seq, payload: { ok: true } })
+    case 'load-cch-order':
+      solver.loadCchOrder(new Uint8Array(req.payload.bytes))
+      return post({ type: 'ack', seq: req.seq, payload: { ok: true } })
+    case 'stats':
+      return post({ type: 'stats', seq: req.seq, payload: statsOf(solver) })
+    case 'cancel':
+      cancelled.add(req.payload.id)
+      return post({ type: 'ack', seq: req.seq, payload: { ok: true } })
+    case 'select-hour': {
+      const cell = caches[req.payload.kind].get(req.payload.hour)
+      if (!cell) return post({ type: 'ack', seq: req.seq, payload: { ok: true } })
+      return post({
+        type: 'hour-result',
+        seq: req.seq,
+        payload: hourResult(0 as RunRequestDTO['id'], req.payload.kind, req.payload.hour, cell),
+      })
+    }
+    case 'run':
+      return runHours(solver, req.payload)
+  }
+}
+
+void loadWasmSolver()
+  .catch(() => null)
+  .then((real) => real ?? createStubSolver())
+  .then((solver) => {
+    post({ type: 'ready', seq: 0, payload: statsOf(solver) })
+    self.onmessage = (ev: MessageEvent<unknown>) => {
+      try {
+        handle(solver, decodeRequest(ev.data))
+      } catch (e) {
+        post(errorOf('run-failed', e, -1))
+      }
+    }
+  })

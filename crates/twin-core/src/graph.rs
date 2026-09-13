@@ -4,7 +4,7 @@
 //! whichever chunks happen to be resident — while the dense indices used by the
 //! CSR are local to the current assembly and change on every add/remove.
 
-use crate::graph_schema::{build_csr, ChunkBuild, ChunkEdge, ChunkNode, GraphChunkSchema};
+use crate::graph_schema::{build_csr, ChunkBuild, ChunkEdge, ChunkNode, GeomCsr, GraphChunkSchema};
 use crate::ids::{ChunkId, EdgeId, NodeId, RoadClass};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -251,5 +251,8 @@ fn owned_chunk(c: &GraphChunkSchema<'_>) -> Result<ChunkBuild, GraphError> {
             })
         })
         .collect::<Result<Vec<_>, GraphError>>()?;
-    Ok(ChunkBuild::new(c.chunk_id(), nodes, edges))
+    // The runtime never draws, so the polylines stay in the wire buffer and are
+    // dropped with it rather than being copied into wasm memory.
+    let geom = GeomCsr::none(edges.len());
+    Ok(ChunkBuild::new(c.chunk_id(), nodes, edges, geom))
 }

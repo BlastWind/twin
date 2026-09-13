@@ -40,6 +40,51 @@ fn chunk_round_trips_zero_copy() {
     let range = bytes.as_ptr() as usize..bytes.as_ptr() as usize + bytes.len();
     assert!(range.contains(&(decoded.node_gid.as_ptr() as usize)));
     assert!(range.contains(&(decoded.out_edges.as_ptr() as usize)));
+    assert!(range.contains(&(decoded.geom_lonlat.as_ptr() as usize)));
+}
+
+/// Every edge carries a full polyline, in the chunk's own edge order, and it
+/// starts at the tail node and ends at the head node.
+#[test]
+fn edge_geometry_round_trips_in_edge_order() {
+    let p = grid_partition(8);
+    let build = &p.chunks[0];
+    let bytes = AlignedBytes::adopt(build.encode());
+    let decoded = GraphChunkSchema::decode(&bytes).expect("chunk decodes");
+
+    assert_eq!(decoded.geom_offsets.len(), build.edges.len() + 1);
+    for (i, e) in build.edges.iter().enumerate() {
+        let line = decoded.geom_of(i);
+        assert!(line.len() >= 2, "a polyline has both endpoints");
+        let head = &build.nodes[e.to as usize];
+        let tail = &build.nodes[e.from as usize];
+        assert_eq!(line[0], [tail.lon, tail.lat], "tail first");
+        assert_eq!(line[line.len() - 1], [head.lon, head.lat], "head last");
+    }
+}
+
+/// A fused chain keeps the shape of everything it swallowed, so simplification
+/// costs nothing visually.
+#[test]
+fn simplification_keeps_the_swallowed_shape() {
+    let nodes: Vec<RawNode> = (0..5)
+        .map(|i| RawNode {
+            lon: -77.3 + i as f64 * 0.01,
+            lat: 38.8,
+        })
+        .collect();
+    let arc = |from: u32, to: u32| {
+        RawEdge::with_defaults(from, to, 100.0, RoadClass::Residential, None, None)
+    };
+    let edges = (0..4u32)
+        .flat_map(|i| [arc(i, i + 1), arc(i + 1, i)])
+        .collect();
+    let simplified = simplify_degree2(&RawGraph::new(nodes, edges));
+
+    assert_eq!(simplified.geom.len(), simplified.edges.len());
+    let line = &simplified.geom[0];
+    assert_eq!(line.len(), 5, "all five original nodes survive as points");
+    assert!(line[0][0] < line[4][0] || line[0][0] > line[4][0]);
 }
 
 #[test]
@@ -155,7 +200,7 @@ fn degree2_chain_collapses() {
         arc(3, 4),
         arc(4, 3),
     ];
-    let simplified = simplify_degree2(&RawGraph { nodes, edges });
+    let simplified = simplify_degree2(&RawGraph::new(nodes, edges));
 
     assert_eq!(
         simplified.nodes.len(),
@@ -193,7 +238,7 @@ fn differing_attributes_block_a_merge() {
         RawEdge::with_defaults(0, 1, 100.0, RoadClass::Primary, None, None),
         RawEdge::with_defaults(1, 2, 100.0, RoadClass::Residential, None, None),
     ];
-    let simplified = simplify_degree2(&RawGraph { nodes, edges });
+    let simplified = simplify_degree2(&RawGraph::new(nodes, edges));
     assert_eq!(
         simplified.nodes.len(),
         3,

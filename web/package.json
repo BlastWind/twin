@@ -12,6 +12,11 @@
     "fixture": "node scripts/make-fixture-pmtiles.mjs"
   },
   "dependencies": {
+    "@deck.gl/core": "^9",
+    "@deck.gl/layers": "^9",
+    "@deck.gl/mapbox": "^9",
+    "cbor-x": "^1.6.6",
+    "idb-keyval": "^6.3.0",
     "maplibre-gl": "^5.24.0",
     "pmtiles": "^4.5.0",
     "react": "^19.3.0",

@@ -147,7 +147,7 @@ fn assemble(ways: &[WayDTO], coords: &HashMap<i64, (f64, f64)>, stats: &mut OsmS
             }
         }
     }
-    RawGraph { nodes, edges }
+    RawGraph::new(nodes, edges)
 }
 
 fn intern(
@@ -190,5 +190,9 @@ pub fn prune_isolated(graph: &RawGraph) -> RawGraph {
             ..*e
         })
         .collect();
-    RawGraph { nodes, edges }
+    RawGraph {
+        nodes,
+        edges,
+        geom: graph.geom.clone(),
+    }
 }

@@ -21,11 +21,15 @@ pub const SECTION_ALIGN: usize = 8;
 
 pub const MAGIC_INDEX: [u8; 4] = *b"TWIX";
 pub const MAGIC_CHUNK: [u8; 4] = *b"TWCH";
+pub const MAGIC_DEMAND: [u8; 4] = *b"TWDM";
+pub const MAGIC_CCH_ORDER: [u8; 4] = *b"TWCO";
 
 /// Breaking-change counter. Bumping either invalidates existing build output;
 /// `manifest.json` pins both and the app refuses a mismatch.
 pub const VERSION_INDEX: u32 = 1;
-pub const VERSION_CHUNK: u32 = 1;
+pub const VERSION_CHUNK: u32 = 2;
+pub const VERSION_DEMAND: u32 = 1;
+pub const VERSION_CCH_ORDER: u32 = 1;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum SchemaError {
@@ -137,8 +141,17 @@ pub enum SectionKind {
     EdgeCapacityVph = 25,
     EdgeLanes = 26,
     EdgeClass = 27,
+    EdgeGeomOffsets = 28,
+    EdgeGeomLonLat = 29,
     OutOffsets = 30,
     OutEdges = 31,
+    DemandMeta = 40,
+    ZoneNode = 41,
+    ZoneLonLat = 42,
+    OdTriples = 43,
+    HourProfile = 44,
+    CchOrderMeta = 50,
+    CchOrderRank = 51,
 }
 
 /// A borrowed, decoded file: the header plus the section table, over the

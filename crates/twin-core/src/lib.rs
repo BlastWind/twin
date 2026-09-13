@@ -9,10 +9,10 @@ pub mod grid;
 pub mod ids;
 pub mod schema;
 
-pub use assembly::{partition, simplify_degree2, Partition, RawEdge, RawGraph, RawNode};
+pub use assembly::{partition, simplify_degree2, Partition, Polyline, RawEdge, RawGraph, RawNode};
 pub use graph::{GraphEdge, GraphError, GraphNode, GraphView, RoadGraph};
 pub use graph_schema::{
-    ChunkBuild, ChunkEdge, ChunkEntrySchema, ChunkMetaSchema, ChunkNode, GraphChunkSchema,
+    ChunkBuild, ChunkEdge, ChunkEntrySchema, ChunkMetaSchema, ChunkNode, GeomCsr, GraphChunkSchema,
     GraphIndexSchema,
 };
 pub use grid::{BBox, GridSchema, DEFAULT_CELL_M};

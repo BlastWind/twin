@@ -89,6 +89,13 @@ pub struct GraphChunkSchema<'a> {
     pub edge_capacity_vph: &'a [f32],
     pub edge_lanes: &'a [u8],
     pub edge_class: &'a [u8],
+    /// CSR over the edge polylines: edge `i` owns
+    /// `geom_lonlat[geom_offsets[i] .. geom_offsets[i + 1]]`, in the chunk's
+    /// own edge order. Length `E + 1`.
+    pub geom_offsets: &'a [u32],
+    /// Every polyline point of every edge, concatenated. Each edge's run runs
+    /// tail-node-first and includes both endpoints.
+    pub geom_lonlat: &'a [[f32; 2]],
     pub out_offsets: &'a [u32],
     pub out_edges: &'a [u32],
 }
@@ -110,6 +117,8 @@ impl<'a> GraphChunkSchema<'a> {
             edge_capacity_vph: f.section(SectionKind::EdgeCapacityVph)?,
             edge_lanes: f.section(SectionKind::EdgeLanes)?,
             edge_class: f.section(SectionKind::EdgeClass)?,
+            geom_offsets: f.section(SectionKind::EdgeGeomOffsets)?,
+            geom_lonlat: f.section(SectionKind::EdgeGeomLonLat)?,
             out_offsets: f.section(SectionKind::OutOffsets)?,
             out_edges: f.section(SectionKind::OutEdges)?,
         };
@@ -145,11 +154,28 @@ impl<'a> GraphChunkSchema<'a> {
         if self.out_offsets.len() != n + 1 || self.out_edges.len() != e {
             return Err(SchemaError::InconsistentLength(SectionKind::OutOffsets));
         }
+        let geom_ok = self.geom_offsets.len() == e + 1
+            && self.geom_offsets.last().copied().unwrap_or(0) as usize == self.geom_lonlat.len()
+            && self.geom_offsets.windows(2).all(|w| w[0] <= w[1]);
+        if !geom_ok {
+            return Err(SchemaError::InconsistentLength(
+                SectionKind::EdgeGeomOffsets,
+            ));
+        }
         Ok(())
     }
 
     pub fn chunk_id(&self) -> ChunkId {
         ChunkId::from_index(self.meta.chunk_id)
+    }
+
+    /// Polyline of local edge `e`, tail-node-first.
+    pub fn geom_of(&self, e: usize) -> &'a [[f32; 2]] {
+        let (a, b) = (
+            self.geom_offsets[e] as usize,
+            self.geom_offsets[e + 1] as usize,
+        );
+        &self.geom_lonlat[a..b]
     }
 
     /// Local edge indices leaving local node `n`.
@@ -185,6 +211,44 @@ pub struct ChunkEdge {
     pub class: RoadClass,
 }
 
+/// Edge polylines in the same CSR shape the file uses, so encoding is a copy
+/// and nothing has to be re-flattened.
+///
+/// Kept beside `ChunkBuild::edges` rather than inside `ChunkEdge` so an edge
+/// row stays `Copy` and the runtime, which never draws anything, can hold a
+/// graph with [`GeomCsr::none`] and pay nothing for geometry.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GeomCsr {
+    pub offsets: Vec<u32>,
+    pub points: Vec<[f32; 2]>,
+}
+
+impl GeomCsr {
+    /// Flatten one polyline per edge.
+    pub fn from_polylines(polylines: &[Vec<[f32; 2]>]) -> Self {
+        let mut offsets = Vec::with_capacity(polylines.len() + 1);
+        let mut points = Vec::with_capacity(polylines.iter().map(Vec::len).sum());
+        offsets.push(0);
+        for line in polylines {
+            points.extend_from_slice(line);
+            offsets.push(points.len() as u32);
+        }
+        Self { offsets, points }
+    }
+
+    /// The empty polyline for every one of `edge_count` edges.
+    pub fn none(edge_count: usize) -> Self {
+        Self {
+            offsets: vec![0; edge_count + 1],
+            points: Vec::new(),
+        }
+    }
+
+    pub fn of(&self, e: usize) -> &[[f32; 2]] {
+        &self.points[self.offsets[e] as usize..self.offsets[e + 1] as usize]
+    }
+}
+
 /// Owned chunk contents. Building one computes the CSR; encoding is then a
 /// straight copy of flat arrays.
 #[derive(Clone, Debug)]
@@ -192,6 +256,7 @@ pub struct ChunkBuild {
     pub chunk_id: ChunkId,
     pub nodes: Vec<ChunkNode>,
     pub edges: Vec<ChunkEdge>,
+    pub geom: GeomCsr,
     out_offsets: Vec<u32>,
     out_edges: Vec<u32>,
 }
@@ -199,12 +264,19 @@ pub struct ChunkBuild {
 impl ChunkBuild {
     /// Pure constructor: sorts nothing, copies nothing twice, derives CSR by
     /// counting sort over `edges`.
-    pub fn new(chunk_id: ChunkId, nodes: Vec<ChunkNode>, edges: Vec<ChunkEdge>) -> Self {
+    pub fn new(
+        chunk_id: ChunkId,
+        nodes: Vec<ChunkNode>,
+        edges: Vec<ChunkEdge>,
+        geom: GeomCsr,
+    ) -> Self {
+        debug_assert_eq!(geom.offsets.len(), edges.len() + 1, "one polyline per edge");
         let (out_offsets, out_edges) = build_csr(nodes.len(), edges.iter().map(|e| e.from));
         Self {
             chunk_id,
             nodes,
             edges,
+            geom,
             out_offsets,
             out_edges,
         }
@@ -272,6 +344,8 @@ impl ChunkBuild {
                     .map(|e| e.class.as_u8())
                     .collect::<Vec<u8>>(),
             )
+            .push(SectionKind::EdgeGeomOffsets, &self.geom.offsets)
+            .push(SectionKind::EdgeGeomLonLat, &self.geom.points)
             .push(SectionKind::OutOffsets, &self.out_offsets)
             .push(SectionKind::OutEdges, &self.out_edges)
             .finish(MAGIC_CHUNK, VERSION_CHUNK, 0)
