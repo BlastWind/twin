@@ -32,10 +32,18 @@ type MetricName =
   | 'fpsZ11'
   | 'fpsZ13'
   | 'fpsZ15'
+  | 'fpsZ15NoImagery'
+  | 'heapBytesLidarZ17'
+  | 'lidarPoints'
   | 'reachNodes'
 
 /** Higher-is-better metrics regress when they *fall*; the rest when they rise. */
-const HIGHER_IS_BETTER: ReadonlySet<MetricName> = new Set<MetricName>(['fpsZ11', 'fpsZ13', 'fpsZ15'])
+const HIGHER_IS_BETTER: ReadonlySet<MetricName> = new Set<MetricName>([
+  'fpsZ11',
+  'fpsZ13',
+  'fpsZ15',
+  'fpsZ15NoImagery',
+])
 
 /**
  * Recorded and printed, but not gated.
@@ -52,6 +60,8 @@ const INFORMATIONAL: ReadonlySet<MetricName> = new Set<MetricName>([
   'fpsZ11',
   'fpsZ13',
   'fpsZ15',
+  'fpsZ15NoImagery',
+  'lidarPoints',
 ])
 
 type Results = Readonly<Record<MetricName, number>>
@@ -180,6 +190,47 @@ const enableAllLayers = async (page: Page): Promise<number> => {
   return n
 }
 
+/** Flip one registry layer on or off from outside React. */
+const setLayer = async (page: Page, id: string, on: boolean): Promise<void> => {
+  await page.evaluate(
+    ({ id: layer, on: want }) => {
+      const g = globalThis as {
+        __twinUi?: { getState: () => { layers: Record<string, boolean>; toggleLayer: (id: string) => void } }
+      }
+      const store = g.__twinUi?.getState()
+      if (store && store.layers[layer] !== want) store.toggleLayer(layer)
+    },
+    { id, on },
+  )
+  await page.waitForTimeout(400)
+}
+
+/**
+ * Downtown Fairfax City at z17 with the point cloud on: the heaviest thing the
+ * client holds, and the one state where the 300 MB byte budget is the binding
+ * constraint rather than a formality. Waits for points to actually arrive so a
+ * missing pipeline output reads as `lidarPoints: 0` instead of a heap figure
+ * that quietly measures nothing.
+ */
+const FAIRFAX_DOWNTOWN: readonly [number, number] = [-77.3064, 38.8462]
+
+const lidarAtZ17 = async (page: Page): Promise<void> => {
+  await page.evaluate((center) => {
+    const g = globalThis as { __twinMap?: { jumpTo: (o: unknown) => void } }
+    g.__twinMap?.jumpTo({ center, zoom: 17, pitch: 55, bearing: 0 })
+  }, FAIRFAX_DOWNTOWN as unknown as [number, number])
+  await page.waitForTimeout(600)
+  await setLayer(page, 'lidar', true)
+  await page
+    .waitForFunction(
+      () => ((globalThis as { __twinGauges?: Record<string, number> }).__twinGauges?.lidarPoints ?? 0) > 0,
+      null,
+      { timeout: 60_000 },
+    )
+    .catch(() => undefined)
+  await page.waitForTimeout(1500)
+}
+
 /**
  * Drops a reach origin at the camera centre and returns how long the first
  * result took. A *duration*, not a page timestamp: when the harness gets round
@@ -266,6 +317,9 @@ test('browser perf harness', async ({ page }) => {
     fpsZ11: Number.NaN,
     fpsZ13: Number.NaN,
     fpsZ15: Number.NaN,
+    fpsZ15NoImagery: Number.NaN,
+    lidarPoints: 0,
+    heapBytesLidarZ17: 0,
   }
 
   // Land the load metrics before the expensive part: if the fps passes overrun
@@ -289,7 +343,23 @@ test('browser perf harness', async ({ page }) => {
     writeJson(RESULTS, { ...loadMetrics, ...fps })
   }
 
-  const results: Results = { ...loadMetrics, ...fps }
+  /**
+   * The imagery basemap is on by default, so `fpsZ15` above already includes
+   * it; this second pass with it off is what makes its cost readable rather
+   * than baked into the number.
+   */
+  await setLayer(page, 'imagery', false)
+  fps.fpsZ15NoImagery = await bestFps(page, 15)
+  await setLayer(page, 'imagery', true)
+
+  await lidarAtZ17(page)
+  const lidar = {
+    lidarPoints: await gauge(page, 'lidarPoints'),
+    heapBytesLidarZ17: await heapBytes(session),
+  }
+  await setLayer(page, 'lidar', false)
+
+  const results: Results = { ...loadMetrics, ...fps, ...lidar }
 
   writeJson(RESULTS, results)
   // eslint-disable-next-line no-console
