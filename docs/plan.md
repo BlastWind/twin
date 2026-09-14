@@ -94,3 +94,10 @@ real 98 MiB `world.pmtiles`, `transit.bin`, `counts.bin`, `feeds.bin`.
 - Open: the model reads well below the counts on a block study area (station
   240 AADT against 24 modelled) — expected when through traffic is truncated,
   but it means calibration is only meaningful county-wide.
+
+## Phase 4 — Tier 1 realism (2026-09-13)
+Ownership: web agent owns `web/`; lidar agent owns `scripts/lidar/`, `data/`, and `crates/twin-pipeline` only for a `lidar` manifest entry.
+
+- Imagery: raster basemap under the extrusions from VGIN (Virginia orthoimagery) or NAIP, as a MapLibre raster source. Prefer a direct WMTS/XYZ endpoint; if only ArcGIS ImageServer export is available, add a tiny dev proxy in vite config and note the production plan (pre-rendered raster PMTiles z10–z16 for the county via gdal2tiles + pmtiles convert, estimated size recorded).
+- LiDAR: USGS 3DEP via the public Entwine EPT bucket (`s3://usgs-lidar-public`, https endpoint), county bbox, thinned to ~1 pt/m² for z16 and ~4 pt/m² for z17+, colorized from the same orthoimagery, classification kept. Output per graph chunk: `data/build/lidar/chunk_{x}_{y}.bin` = header (existing format, section kinds 90/91/92) + `xyz: f32[N*3]` (lon, lat, height m) + `rgb: u8[N*3]` + `class: u8[N]`, plus `lidar/index.json` {chunk -> bytes, points}. Manifest `lidar` entry.
+- Web: `PointCloudLayer` for lidar chunks in the viewport at z ≥ 16, loaded via AssetLoader at viewport priority, evicted with LRU; toggle in Layers → Base; buildings extrusion auto-dims when lidar is on. Roof shapes from OSM `roof:shape` are optional, only if cheap.
