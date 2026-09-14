@@ -17,3 +17,5 @@ anyhow = "1"
 flate2 = "1.1.10"
 csv = "1.4.0"
 gtfs-structures = "0.42"
+bytemuck = { workspace = true }
+thiserror = { workspace = true }

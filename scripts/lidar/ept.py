@@ -232,15 +232,29 @@ def fetch_node(
     return PointBatch(x[keep], y[keep], z[keep], cls[keep])
 
 
-def voxel_thin(batch: PointBatch, cell_m: Metres) -> PointBatch:
-    """Keep one point per `cell_m` cube. Deterministic: the first in scan order."""
+#: Voxel indices are taken off a fixed origin so that thinning a node and
+#: thinning the whole chunk land on the same grid. Z is well above any terrain.
+VOXEL_Z0: Metres = -1000.0
+
+
+def voxel_thin(batch: PointBatch, cell_m: Metres, origin: tuple[float, float]) -> PointBatch:
+    """Keep one point per `cell_m` cube, the first in scan order.
+
+    Cell indices are folded into a single int64 key rather than a 3-column
+    array; over tens of millions of points that is a sort of 8 bytes a point
+    instead of 24.
+    """
     if len(batch) == 0:
         return batch
-    ix = np.floor(batch.x / cell_m).astype(np.int64)
-    iy = np.floor(batch.y / cell_m).astype(np.int64)
-    iz = np.floor(batch.z / cell_m).astype(np.int64)
-    keys = np.stack([ix, iy, iz], axis=1)
-    _, first = np.unique(keys, axis=0, return_index=True)
+    idx = [
+        np.floor((a - o) / cell_m).astype(np.int64)
+        for a, o in ((batch.x, origin[0]), (batch.y, origin[1]), (batch.z, VOXEL_Z0))
+    ]
+    span = max(int(a.max()) + 1 for a in idx)
+    if span >= (1 << 21) or min(int(a.min()) for a in idx) < 0:
+        raise ValueError(f"voxel index span {span} does not fit the int64 key packing")
+    key = (idx[0] << 42) | (idx[1] << 21) | idx[2]
+    _, first = np.unique(key, return_index=True)
     first.sort()
     return PointBatch(batch.x[first], batch.y[first], batch.z[first], batch.cls[first])
 

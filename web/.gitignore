@@ -15,6 +15,7 @@ public/data/cch_order.bin
 public/data/transit.bin
 public/data/counts.bin
 public/data/feeds.bin
+public/data/lidar
 
 bench/integration.json
 bench/county.json

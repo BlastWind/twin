@@ -39,6 +39,10 @@ pub struct ManifestDTO {
     /// Present once `ingest-crashes` has run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feeds: Option<FeedsInfoDTO>,
+    /// Present once `scripts/lidar/build.py` has run and `attach-lidar` folded
+    /// its index in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lidar: Option<crate::lidar::LidarInfoDTO>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

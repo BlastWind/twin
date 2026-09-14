@@ -10,6 +10,7 @@ mod crashes;
 mod gis;
 mod graph_io;
 mod gtfs;
+mod lidar;
 mod lodes;
 mod manifest;
 mod osm;
@@ -55,6 +56,9 @@ enum Command {
     IngestCounts(CommonFlags),
     /// Bin VDOT crashes to the grid and to edges, and write feeds.bin.
     IngestCrashes(CommonFlags),
+    /// Fold an existing lidar/index.json into manifest.json. The chunks
+    /// themselves come from `scripts/lidar/build.py`.
+    AttachLidar(CommonFlags),
 }
 
 /// Flags every post-ingest stage shares: they all read the built graph.
@@ -175,6 +179,7 @@ fn main() -> Result<()> {
         Command::IngestGtfs(flags) => ingest_gtfs(&resolve(flags.into())?),
         Command::IngestCounts(flags) => ingest_counts(&resolve(flags.into())?),
         Command::IngestCrashes(flags) => ingest_crashes(&resolve(flags.into())?),
+        Command::AttachLidar(flags) => attach_lidar(&resolve(flags.into())?),
     }
 }
 
@@ -326,6 +331,27 @@ fn ingest_counts(cfg: &PipelineConfig) -> Result<()> {
             })
         },
     )
+}
+
+fn attach_lidar(cfg: &PipelineConfig) -> Result<()> {
+    let started = Instant::now();
+    let path = cfg.out_dir.join("manifest.json");
+    let mut manifest = ManifestDTO::load(&path)?;
+    let index = lidar::attach(&mut manifest, &cfg.out_dir)?;
+    manifest.upsert_stages(vec![StageDTO {
+        name: "attach-lidar".into(),
+        ms: started.elapsed().as_millis(),
+    }]);
+    manifest.write(&path)?;
+    eprintln!(
+        "    lidar                  {} chunks, {} points, {:.1} MiB, {} @ {} pt/m2",
+        index.totals.chunks,
+        index.totals.points,
+        index.totals.bytes as f64 / (1024.0 * 1024.0),
+        index.source.ept_resource,
+        index.pts_per_m2
+    );
+    Ok(())
 }
 
 fn ingest_crashes(cfg: &PipelineConfig) -> Result<()> {
@@ -508,6 +534,7 @@ fn ingest_roads(cfg: &PipelineConfig) -> Result<()> {
     let (files, counts) = stage(&mut stages, "encode+write", || write_graph(cfg, &part))?;
 
     let man = ManifestDTO {
+        lidar: None,
         manifest_version: 1,
         schema: SchemaVersionsDTO::default(),
         bbox: bbox_array(&cfg.bbox),

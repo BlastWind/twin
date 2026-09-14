@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { MapView } from '../map/MapView'
 import { ResultOverlay } from '../overlay/ResultOverlay'
+import { LidarOverlay } from '../lidar/LidarOverlay'
 import { LayerPanel } from './LayerPanel'
 import { DevOverlay } from './DevOverlay'
 import { HourScrubber } from './HourScrubber'
@@ -34,6 +35,7 @@ export const App = () => {
     <>
       <MapView />
       <ResultOverlay />
+      <LidarOverlay />
       <div className="left-rail">
         <LayerPanel />
         <StudyAreaTool />

@@ -42,6 +42,8 @@ export type Gauge =
   | 'scenarioHours'
   | 'overlayPaths'
   | 'reachNodes'
+  | 'lidarChunks'
+  | 'lidarPoints'
   /** 1 once every available registry layer has been switched on. */
   | 'allLayersOn'
 

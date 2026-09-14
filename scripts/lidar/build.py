@@ -137,13 +137,19 @@ def build_chunk(
     west, south, east, north = grid.cell_bbox(cx, cy)
     box = ept.merc_box(west, south, east, north)
     nodes = ept.Hierarchy(session, info).nodes_in(box, depth)
+    origin = (box.xmin, box.ymin)
+
+    # Thin inside the worker: a deep node can hold a million points, and only
+    # one per voxel survives, so the peak is a node rather than a chunk.
+    def fetch_thinned(key: ept.NodeKey) -> ept.PointBatch:
+        return ept.voxel_thin(ept.fetch_node(session, info, key, box), cell_m, origin)
 
     batches: list[ept.PointBatch] = []
     with ThreadPoolExecutor(max_workers=threads) as pool:
-        futures = [pool.submit(ept.fetch_node, session, info, key, box) for key, _ in nodes]
+        futures = [pool.submit(fetch_thinned, key) for key, _ in nodes]
         for fut in as_completed(futures):
             batches.append(fut.result())
-    thinned = ept.voxel_thin(ept.concat(batches), cell_m)
+    thinned = ept.voxel_thin(ept.concat(batches), cell_m, origin)
 
     lon, lat = ept.merc_to_lonlat(thinned.x, thinned.y)
     height = thinned.z.astype(np.float32)

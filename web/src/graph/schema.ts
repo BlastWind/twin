@@ -38,6 +38,10 @@ export const SectionKind = {
   GeomLonLat: 29,
   OutOffsets: 30,
   OutEdges: 31,
+  // Phase 4 lidar chunks (DESIGN / plan Phase 4). Same header, own file.
+  LidarXyz: 90,
+  LidarRgb: 91,
+  LidarClass: 92,
 } as const
 export type SectionKind = (typeof SectionKind)[keyof typeof SectionKind]
 
@@ -76,6 +80,10 @@ export type FileView = {
 
 const ascii = (b: Uint8Array): string => String.fromCharCode(...b)
 
+/** Every file the pipeline writes opens with a four-byte `TW..` tag. */
+export const magicOf = (buffer: ArrayBuffer): string =>
+  ascii(new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength)))
+
 export const parseFile = (buffer: ArrayBuffer, magic: string): FileView => {
   const bytes = new Uint8Array(buffer)
   if (bytes.byteLength < HEADER_BYTES) throw new SchemaError(`truncated: ${bytes.byteLength} < ${HEADER_BYTES}`)
@@ -112,7 +120,7 @@ const findEntry = (f: FileView, kinds: readonly number[]): SectionEntry | undefi
  * Borrow a section as a typed array. `stride` is elements-per-record (2 for
  * `[f32;2]`); the on-disk `elem_size` is checked against it.
  */
-const sectionOpt = <T>(f: FileView, kinds: readonly number[], ctor: TypedCtor<T>, stride = 1): T | undefined => {
+export const sectionOpt = <T>(f: FileView, kinds: readonly number[], ctor: TypedCtor<T>, stride = 1): T | undefined => {
   const entry = findEntry(f, kinds)
   if (!entry) return undefined
   const expect = ctor.BYTES_PER_ELEMENT * stride

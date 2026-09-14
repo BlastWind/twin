@@ -2344,6 +2344,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake3",
+ "bytemuck",
  "clap",
  "csv",
  "flate2",
@@ -2351,6 +2352,7 @@ dependencies = [
  "osmpbf",
  "serde",
  "serde_json",
+ "thiserror 2.0.20",
  "toml",
  "twin-core",
 ]

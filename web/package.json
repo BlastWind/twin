@@ -10,6 +10,7 @@
     "test": "vitest run",
     "bench": "playwright test -c bench/playwright.config.ts",
     "fixture": "node scripts/make-fixture-pmtiles.mjs",
+    "fixture:lidar": "node scripts/make-fixture-lidar.mjs",
     "patch-wasm": "node scripts/patch-wasm-mt.mjs",
     "predev": "node scripts/patch-wasm-mt.mjs",
     "prebuild": "node scripts/patch-wasm-mt.mjs"
