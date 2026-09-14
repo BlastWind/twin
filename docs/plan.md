@@ -101,3 +101,33 @@ Ownership: web agent owns `web/`; lidar agent owns `scripts/lidar/`, `data/`, an
 - Imagery: raster basemap under the extrusions from VGIN (Virginia orthoimagery) or NAIP, as a MapLibre raster source. Prefer a direct WMTS/XYZ endpoint; if only ArcGIS ImageServer export is available, add a tiny dev proxy in vite config and note the production plan (pre-rendered raster PMTiles z10–z16 for the county via gdal2tiles + pmtiles convert, estimated size recorded).
 - LiDAR: USGS 3DEP via the public Entwine EPT bucket (`s3://usgs-lidar-public`, https endpoint), county bbox, thinned to ~1 pt/m² for z16 and ~4 pt/m² for z17+, colorized from the same orthoimagery, classification kept. Output per graph chunk: `data/build/lidar/chunk_{x}_{y}.bin` = header (existing format, section kinds 90/91/92) + `xyz: f32[N*3]` (lon, lat, height m) + `rgb: u8[N*3]` + `class: u8[N]`, plus `lidar/index.json` {chunk -> bytes, points}. Manifest `lidar` entry.
 - Web: `PointCloudLayer` for lidar chunks in the viewport at z ≥ 16, loaded via AssetLoader at viewport priority, evicted with LRU; toggle in Layers → Base; buildings extrusion auto-dims when lidar is on. Roof shapes from OSM `roof:shape` are optional, only if cheap.
+
+## Phase 4 outcome — lidar (2026-09-13)
+
+Source is `VA_NorthernVA_1_B22` on the public `usgs-lidar-public` Entwine
+bucket (73.1 G points; its conforming bounds cover the whole county bbox).
+Read without PDAL: EPT is a JSON octree over laszip blobs, so `requests` +
+`laspy`/`lazrs` in `scripts/lidar/` reads it directly. Colour is sampled from
+VBMP z17 tiles, the same service the web basemap draws.
+
+Delivered: the 3×3 block around Fairfax City (chunks 9..11 × 12..14) at
+1 pt/m², **35,893,769 points, 574,301,192 bytes**, ~3 min wall at three chunks
+in parallel; 4.0 M points and 64 MB a chunk. `lidar/index.json` and the
+manifest `lidar` block are written; `twin-pipeline`'s `attach-lidar` folds one
+into the other and its unit test decodes a produced chunk.
+
+Three things the contract did not anticipate, all documented in
+`scripts/lidar/README.md`:
+
+1. This delivery leaves vegetation at classification 1 — there are no 3/4/5
+   points anywhere in it — so the kept set is 1, 2, 3, 4, 5, 6, 9 and a chunk
+   is 61 % class 1, 26 % ground, 12 % building.
+2. Thinning is a 2-D surface thin (highest return per cell), not a 3-D voxel
+   thin, which at 1 pt/m² would have been 4 pt/m² and 265 MB a chunk of
+   interior canopy.
+3. 64 MB a chunk against the web layer's 300 MB budget means a wide z16 view
+   holds four or five chunks. `--pts-per-m2 0.25` gives 16 MB a chunk if the
+   layer needs a wider footprint.
+
+County-wide at 1 pt/m² is ~1.9 G points, ~30 GB and ~2 h 15 m at `--jobs 3`;
+the run is resumable per chunk, so it can be restarted at any point.
