@@ -102,6 +102,11 @@ fetch threads on a home connection:
 | 0.077  | 8         | 68            | 0.33 M | 5.2 MB   | 29 s |
 | 1.0    | 10        | 747           | 6.48 M | 103.7 MB | 67 s |
 
+The 3x3 block around Fairfax City (chunks 9..11 x 12..14) at 1 pt/m², three
+chunks at a time with ten fetch threads each: **57,203,780 points, 915,261,368
+bytes, 6 min 20 s wall**, 6.1-6.5 M points and 98-104 MB a chunk, 57-146 s a
+chunk depending on how many were running beside it.
+
 Per chunk the file is **16 bytes a point** (12 xyz + 3 rgb + 1 class), so
 `bytes ≈ 16 × area_m² × pts_per_m²`. Depth `d` costs roughly 4× the nodes and
 4× the points of depth `d-1`, and one depth step is a factor 4 in density.

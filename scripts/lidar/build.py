@@ -201,7 +201,7 @@ def write_index(grid: GridDTO, resource: str, pts_per_m2: float, zoom: int) -> d
             "bucket": ept.BUCKET,
             "imagery": imagery.ImagerySource(zoom=zoom).template,
             "imagery_zoom": zoom,
-            "license": "public domain (USGS 3DEP / USGS national orthoimagery)",
+            "license": "USGS 3DEP: public domain. VBMP imagery: VGIN/VDEM, credit required.",
         },
         "pts_per_m2": pts_per_m2,
         "classes_kept": list(ept.KEEP_CLASSES),

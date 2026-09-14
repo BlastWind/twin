@@ -5,6 +5,11 @@
 //! of the contract: the section numbering, a zero-copy view over one chunk, and
 //! a test that decodes a file the script produced. Nothing here writes points.
 
+// The decoder below has no caller in this binary on purpose: it exists so the
+// Rust reading of the format is written down and tested against a file the
+// Python encoder produced. The browser is the real consumer.
+#![allow(dead_code)]
+
 use crate::manifest::{FileDTO, ManifestDTO};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -225,6 +230,19 @@ mod tests {
         assert!(
             view.class.iter().all(|c| matches!(c, 2 | 3 | 4 | 5 | 6)),
             "unexpected classification survived the filter"
+        );
+
+        // Colours come from imagery, not from a fallback fill, so they must
+        // vary: an all-grey chunk means every tile fetch failed.
+        let grey = view
+            .rgb
+            .chunks_exact(3)
+            .filter(|c| c == &[140, 140, 140])
+            .count();
+        assert!(
+            grey * 10 < view.points(),
+            "{grey} of {} points kept the fallback colour",
+            view.points()
         );
     }
 }

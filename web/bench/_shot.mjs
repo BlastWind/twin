@@ -1,0 +1,13 @@
+import { chromium } from '@playwright/test'
+const b = await chromium.launch({ args: ['--use-gl=swiftshader','--enable-unsafe-swiftshader','--disable-dev-shm-usage'] })
+const p = await b.newPage({ viewport: { width: 1000, height: 700 } })
+p.on('console', (m) => m.type() === 'error' && console.log('[err]', m.text().slice(0,200)))
+await p.goto('http://localhost:4317/', { waitUntil: 'load' })
+await p.waitForFunction(() => globalThis.__twinMapReady === true, null, { timeout: 90000 })
+await p.evaluate(() => globalThis.__twinMap.jumpTo({ center: [-77.3064, 38.8462], zoom: 17, pitch: 55 }))
+await p.evaluate(() => { const s = globalThis.__twinUi.getState(); if (!s.layers.lidar) s.toggleLayer('lidar') })
+await p.waitForFunction(() => (globalThis.__twinGauges?.lidarPoints ?? 0) > 0, null, { timeout: 90000 }).catch(() => console.log('no lidar points'))
+await p.waitForTimeout(6000)
+await p.screenshot({ path: '/tmp/lidar_z17.png' })
+console.log('gauges', JSON.stringify(await p.evaluate(() => globalThis.__twinGauges)))
+await b.close()
