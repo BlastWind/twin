@@ -216,6 +216,10 @@ export class AssetLoader {
     if (cached) return await cached.arrayBuffer()
     const res = await this.cfg.fetchImpl(this.url(task.path), { signal: task.controller.signal })
     if (!res.ok) throw new Error(`asset ${task.path}: HTTP ${res.status}`)
+    const type = res.headers.get('content-type') ?? ''
+    // A dev server answers a missing file with index.html; surface that here
+    // instead of as a "bad magic" error deep in the decoder.
+    if (type.includes('text/html')) throw new Error(`asset ${task.path}: server returned HTML (missing file?)`)
     const buf = await res.arrayBuffer()
     await cache?.put(this.url(task.path), new Response(buf.slice(0))).catch(() => undefined)
     return buf
