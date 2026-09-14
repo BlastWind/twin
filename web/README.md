@@ -68,7 +68,17 @@ flat (terrain-less) map does not float the cloud.
 
 `public/data/lidar` is a symlink to `../../../data/build/lidar` when the
 pipeline output exists; `pnpm fixture:lidar` writes a small synthetic chunk set
-there instead when it does not.
+there instead when it does not, and `--force` synthesises either way.
+
+Verified against the real pipeline output: chunk `10_13`, 3,991,722 points,
+63.9 MB, `ground_min` 99.639 m — one chunk selected at z17 over downtown
+Fairfax City, decoded and drawn, 28.1 MB heap. Note that the real chunks run
+~60–100 MB each, so the 300 MB budget holds three or four of them.
+
+**Before a production build:** `vite build` copies `public/` into `dist/`, and
+it follows symlinks — with the lidar link in place that is ~1 GB of copying.
+Drop `public/data/lidar` (or point the deployed app at the real asset store)
+before building for release.
 
 ### Roof shapes
 
