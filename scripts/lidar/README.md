@@ -56,11 +56,14 @@ Kill it and restart it freely. Imagery tiles are cached under
 binary (DESIGN.md section 5): a 16-byte header `TWLD`/version 1, a table of
 24-byte section entries, then 8-byte-aligned payloads.
 
-| kind | name  | element  | length |
-|------|-------|----------|--------|
-| 90   | xyz   | `f32`    | `3N` — interleaved lon, lat, height in metres |
-| 91   | rgb   | `u8`     | `3N` |
-| 92   | class | `u8`     | `N` — raw LAS classification |
+| kind | name  | element  | elem_size | len |
+|------|-------|----------|-----------|-----|
+| 90   | xyz   | `[f32;3]` — lon, lat, height in metres | 12 | `N` |
+| 91   | rgb   | `[u8;3]`  | 3 | `N` |
+| 92   | class | `u8` — raw LAS classification | 1 | `N` |
+
+`elem_size` is the record width, as it is for `node_lonlat: [f32;2]` in the
+graph chunks, so the payload is `3N` floats and `3N` colour bytes.
 
 Classifications kept: 2 ground, 3/4/5 low/medium/high vegetation, 6 building.
 Everything else, noise (7, 18) included, is dropped at read time.

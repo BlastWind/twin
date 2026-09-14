@@ -58,17 +58,19 @@ def write_file(sections: list[Section], magic: bytes, version: int, flags: int =
 def encode_chunk(
     lon: np.ndarray, lat: np.ndarray, height_m: np.ndarray, rgb: np.ndarray, cls: np.ndarray
 ) -> bytes:
-    """`xyz: f32[N*3]` interleaved (lon, lat, height), `rgb: u8[N*3]`, `class: u8[N]`."""
+    """`xyz: [f32;3][N]` (lon, lat, height), `rgb: [u8;3][N]`, `class: u8[N]`."""
     n = lon.size
     assert lat.size == n and height_m.size == n and cls.size == n and rgb.shape == (n, 3)
     xyz = np.empty((n, 3), dtype="<f4")
     xyz[:, 0] = lon
     xyz[:, 1] = lat
     xyz[:, 2] = height_m
+    # `elem_size` is the record width, as it is for `node_lonlat: [f32;2]` in
+    # the graph chunks: xyz is one 12-byte record a point, rgb one 3-byte one.
     return write_file(
         [
-            Section(KIND_XYZ, 4, n * 3, xyz.tobytes()),
-            Section(KIND_RGB, 1, n * 3, np.ascontiguousarray(rgb, dtype=np.uint8).tobytes()),
+            Section(KIND_XYZ, 12, n, xyz.tobytes()),
+            Section(KIND_RGB, 3, n, np.ascontiguousarray(rgb, dtype=np.uint8).tobytes()),
             Section(KIND_CLASS, 1, n, np.ascontiguousarray(cls, dtype=np.uint8).tobytes()),
         ],
         MAGIC_LIDAR,

@@ -183,8 +183,8 @@ impl<'a> LidarChunkView<'a> {
         };
 
         let xyz: &[f32] =
-            bytemuck::try_cast_slice(payload(KIND_XYZ, 4)?).map_err(|_| LidarError::Misaligned)?;
-        let rgb = payload(KIND_RGB, 1)?;
+            bytemuck::try_cast_slice(payload(KIND_XYZ, 12)?).map_err(|_| LidarError::Misaligned)?;
+        let rgb = payload(KIND_RGB, 3)?;
         let class = payload(KIND_CLASS, 1)?;
         if xyz.len() != class.len() * 3 || rgb.len() != class.len() * 3 {
             return Err(LidarError::InconsistentLength);
