@@ -25,6 +25,15 @@ import {
  * business in the assignment overlay's render path. deck.gl is lazy-imported
  * either way, so a second instance costs nothing until the layer is switched
  * on.
+ *
+ * It is `interleaved: false`, unlike the result overlay, and that is not a
+ * preference: a second *interleaved* `MapboxOverlay` on the same map renders
+ * nothing at all (verified — 240k points loaded, zero pixels), because
+ * interleaving hands deck the map's own GL context and the two instances fight
+ * over it. Overlaid mode gives the cloud its own canvas above the map, so it
+ * draws over the building extrusions rather than being depth-tested against
+ * them — which is exactly why the extrusions drop to 0.25 opacity while it is
+ * on.
  */
 
 type DeckLayer = new (props: Record<string, unknown>) => unknown
@@ -162,7 +171,7 @@ export const LidarOverlay = () => {
 
   useEffect(() => {
     if (!map || !deck || !on) return
-    const overlay = new deck.MapboxOverlay({ interleaved: true, layers: [] })
+    const overlay = new deck.MapboxOverlay({ interleaved: false, layers: [] })
     map.addControl(overlay)
     overlayRef.current = overlay
     return () => {
