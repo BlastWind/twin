@@ -11,12 +11,13 @@ coloured from national orthoimagery, written one binary per graph chunk.
   (EPSG:3857 `-8678854, 4650340 .. -8575033, 4768403`) cover the whole Fairfax
   County bbox in `manifest.json`. The two neighbouring resources
   (`VA_NorthernVA_2_B22`, `_3_B22`) are further south and are not needed.
-- **Colour**: `USGSImageryOnly` XYZ tiles from `basemap.nationalmap.gov` at
-  z17 (~1.1 m/px at this latitude), nearest-pixel per point. Override with
-  `TWIN_IMAGERY_TEMPLATE` (an `{z}/{y}/{x}` template) to match whatever raster
-  basemap the web app settles on.
-- **Licence**: public domain. 3DEP and the USGS national orthoimagery mosaic
-  are US Government works, no attribution required (crediting USGS is polite).
+- **Colour**: VGIN's VBMP "most recent imagery" cache at z17 (~1.1 m/px here),
+  nearest-pixel per point — the same service the web app's raster basemap uses
+  (`web/src/map/imagery.ts`), so a point matches the imagery under it. Override
+  with `TWIN_IMAGERY_TEMPLATE` (a `{z}/{y}/{x}` template).
+- **Licence**: 3DEP is public domain (US Government work). VBMP imagery is
+  public Virginia government data, free to use with credit to VGIN/VDEM; the
+  web app carries that attribution in its MapLibre control.
 
 No PDAL. EPT is a JSON octree over laszip blobs, so `requests` + `laspy`
 (`lazrs` backend) reads it directly, which avoids a native GDAL/PDAL build.

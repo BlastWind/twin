@@ -72,7 +72,12 @@ there instead when it does not.
 
 ### Roof shapes
 
-Skipped. The vector tiles carry no `roof:shape` attribute (`world.pmtiles`
-`building` layer has `height`, `render_height`, `min_height`,
-`building:levels`), so roof geometry would mean a pipeline change, which belongs
-to the tile build and not to `web/`.
+Skipped, deliberately. `world.pmtiles`'s `vector_layers` metadata says what the
+building layers actually carry:
+
+- `building`: `colour`, `hide_3d`, `render_height`, `render_min_height`
+- `buildings`: `height`, `kind`, `source`
+
+No `roof:shape`, and no gable/hipped geometry to derive one from. Rendering roof
+shapes would mean re-cutting the tiles with the OSM tag carried through, which
+is a pipeline change and not `web/`'s to make.

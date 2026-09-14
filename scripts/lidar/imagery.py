@@ -1,8 +1,8 @@
 """Per-point RGB sampled from public orthoimagery XYZ tiles.
 
-Default source is the USGS National Map `USGSImageryOnly` service, which is the
-NAIP/high-resolution ortho mosaic reprojected to Web Mercator. Tiles are cached
-on disk, so a re-run of a chunk costs no imagery bandwidth.
+Default source is VGIN's VBMP statewide orthoimagery, which is what the web
+app's raster basemap draws. Tiles are cached on disk, so a re-run of a chunk
+costs no imagery bandwidth.
 """
 
 from __future__ import annotations
@@ -17,9 +17,13 @@ import requests
 from PIL import Image
 
 TILE_PX = 256
+#: VGIN's VBMP "most recent imagery" cache — the same service the web app's
+#: raster basemap uses (`web/src/map/imagery.ts`), so a point's colour matches
+#: the imagery underneath it. An ArcGIS cached MapServer in EPSG:3857 with the
+#: standard top-left origin, i.e. XYZ with the row and column transposed.
 DEFAULT_TEMPLATE = (
-    "https://basemap.nationalmap.gov/arcgis/rest/services/"
-    "USGSImageryOnly/MapServer/tile/{z}/{y}/{x}"
+    "https://vginmaps.vdem.virginia.gov/arcgis/rest/services/"
+    "VBMP_Imagery/MostRecentImagery_WGS/MapServer/tile/{z}/{y}/{x}"
 )
 #: Mid-grey stand-in where a tile is missing, so a hole never reads as black.
 FALLBACK_RGB = (140, 140, 140)

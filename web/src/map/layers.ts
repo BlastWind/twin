@@ -440,9 +440,12 @@ const toMapLibreLayer = (entry: LayerEntry, visible: boolean, group?: LodGroup):
     },
   }) as LayerSpecification
 
-/** Every MapLibre layer id produced by one registry entry. */
+/**
+ * Every MapLibre layer id produced by one registry entry — none, for an entry
+ * deck.gl draws: it has a toggle and a legend row but no layer in the style.
+ */
 export const mapLayerIds = (entry: LayerEntry): readonly string[] =>
-  entry.lod ? entry.lod.map((g) => `${entry.id}/${g.suffix}`) : [entry.id]
+  entry.deck ? [] : entry.lod ? entry.lod.map((g) => `${entry.id}/${g.suffix}`) : [entry.id]
 
 export type LayerVisibility = Readonly<Record<LayerId, boolean>>
 
