@@ -42,7 +42,7 @@ cargo run -p twin-pipeline -- attach-lidar
 ```
 
 Flags worth knowing: `--pts-per-m2` (default 1.0) picks the EPT depth and the
-voxel size together; `--jobs` chunks in parallel, `--threads` EPT fetches
+cell size together; `--jobs` chunks in parallel, `--threads` EPT fetches
 within a chunk; `--force` re-does chunks that already have a sidecar.
 
 The run is **resumable**: each finished chunk writes
@@ -65,8 +65,25 @@ binary (DESIGN.md section 5): a 16-byte header `TWLD`/version 1, a table of
 `elem_size` is the record width, as it is for `node_lonlat: [f32;2]` in the
 graph chunks, so the payload is `3N` floats and `3N` colour bytes.
 
-Classifications kept: 2 ground, 3/4/5 low/medium/high vegetation, 6 building.
-Everything else, noise (7, 18) included, is dropped at read time.
+Thinning keeps the **highest return per cell**, so a chunk is a digital surface
+model at the requested density: roofs, canopy tops, and bare ground where
+nothing is above it. The cell is sized in ground metres — Web-Mercator metres
+run 1.28 short of a real metre at this latitude, and not dividing that out
+inflates the density by 1.6x. A 3-D voxel thin was tried first and is wrong for this
+data — canopy fills a column of 1 m voxels, so "1 pt/m²" came out at 4 pt/m²
+and 265 MB a chunk, nearly all of it interior canopy no top-down view shows.
+
+Classifications kept: 1 unclassified, 2 ground, 3/4/5 vegetation, 6 building,
+9 water. Noise (7, 18) and the withheld/overlap classes are dropped at read
+time.
+
+Class 1 is kept because this delivery needs it: it classifies ground,
+building, water and noise and leaves everything else at 1. A sample depth-10
+node over Fairfax City is 41 % class 1, 48 % ground, 11 % building, 0.1 %
+noise, and has no 3/4/5 at all — so filtering to the nominal vegetation
+classes would delete every tree. Points that read as vegetation therefore
+arrive labelled 1, and a renderer colouring by class should treat 1 as
+"everything above ground that is not a building".
 
 `lon`/`lat` are `f32` as the contract specifies, which quantises position to
 about 0.4 m at this longitude. That is below the 1 m voxel, but a renderer that
@@ -94,34 +111,43 @@ drift apart. The test skips when `data/build/lidar/` is empty.
 
 ## Cost model
 
-Measured on chunk 10 13 (Fairfax City, dense suburb, 2 km cell = 4.0 km²), 12
-fetch threads on a home connection:
+Measured on chunk 10 13 (Fairfax City, dense suburb; the grid cell is 2 km of
+ground on a side, 4.0 km²), ten fetch threads on a home connection:
 
 | pts/m² | EPT depth | nodes fetched | points | file | wall |
 |--------|-----------|---------------|--------|------|------|
-| 0.077  | 8         | 68            | 0.33 M | 5.2 MB   | 29 s |
-| 1.0    | 10        | 747           | 6.48 M | 103.7 MB | 67 s |
+| 0.077  | 8         | 68            | 0.33 M | 5.2 MB  | 29 s |
+| 1.0    | 10        | 747           | 3.99 M | 63.9 MB | 37 s |
 
-The 3x3 block around Fairfax City (chunks 9..11 x 12..14) at 1 pt/m², three
-chunks at a time with ten fetch threads each: **57,203,780 points, 915,261,368
-bytes, 6 min 20 s wall**, 6.1-6.5 M points and 98-104 MB a chunk, 57-146 s a
-chunk depending on how many were running beside it.
+The 3×3 block around Fairfax City (chunks 9..11 × 12..14) at 1 pt/m², three
+chunks at a time with ten fetch threads each: **35,893,769 points,
+574,301,192 bytes, about 3 minutes wall**; 3.98–4.00 M points and 63.6–64.0 MB
+a chunk, 37–60 s a chunk. Composition is 61 % class 1 (canopy and everything
+else unclassified), 26 % ground, 12 % building.
 
-Per chunk the file is **16 bytes a point** (12 xyz + 3 rgb + 1 class), so
-`bytes ≈ 16 × area_m² × pts_per_m²`. Depth `d` costs roughly 4× the nodes and
-4× the points of depth `d-1`, and one depth step is a factor 4 in density.
+The file is **16 bytes a point** (12 xyz + 3 rgb + 1 class) and the thin puts
+exactly one point in each ground square metre, so
+`bytes ≈ 16 × area_m² × pts_per_m²` — 64 MB for a 2 km cell at 1 pt/m², and a
+quarter of that per step down in density. Fetch cost does not fall as fast:
+EPT depth `d` holds ~4× the points of `d-1`, so halving the linear density
+saves one depth level, i.e. about 4× the nodes.
 
 Extrapolating to the 469 graph chunks of the county:
 
 | pts/m² | county points | county bytes | wall at `--jobs 3` |
 |--------|---------------|--------------|--------------------|
-| 1.0    | ~3.0 G        | ~48 GB       | ~3 h               |
-| 0.25   | ~0.76 G       | ~12 GB       | ~1 h               |
-| 0.077  | ~0.23 G       | ~3.7 GB      | ~25 min            |
+| 1.0    | ~1.9 G        | ~30 GB       | ~2 h 15 m          |
+| 0.25   | ~0.47 G       | ~7.5 GB      | ~40 min            |
+| 0.077  | ~0.14 G       | ~2.3 GB      | ~20 min            |
 
-A 104 MB chunk is more than a browser wants to hold: at 1 pt/m² a 3×3 viewport
-is ~0.9 GB. If the point-cloud layer needs to stay inside a sane LRU, build the
-county at `--pts-per-m2 0.25` (26 MB a chunk) or 0.077 (5 MB a chunk) and keep
-1 pt/m² for the handful of chunks a demo flies over.
+A 64 MB chunk is a lot for a browser: `web/src/lidar/viewport.ts` holds a
+300 MB budget, which is four or five of them, so a wide view at z16 will drop
+chunks. If the layer needs a bigger footprint on screen, rebuild at
+`--pts-per-m2 0.25` (16 MB a chunk) and keep 1 pt/m² for the chunks a demo
+flies over.
+
+Memory, not bandwidth, is what limits `--jobs`: a worker peaks around 1.5 GB
+while it folds a chunk together, so three at a time is the ceiling on an 8 GB
+box and the run gets OOM-killed at five.
 
 Everything under `data/` is gitignored; only this pipeline is committed.

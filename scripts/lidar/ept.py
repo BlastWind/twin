@@ -31,8 +31,16 @@ DEFAULT_RESOURCE = "VA_NorthernVA_1_B22"
 EARTH_R: Metres = 6378137.0
 MERC_MAX: Mercator = math.pi * EARTH_R
 
-#: LAS classifications we keep. Ground, low/medium/high vegetation, building.
-KEEP_CLASSES: tuple[int, ...] = (2, 3, 4, 5, 6)
+#: LAS classifications we keep: unclassified, ground, low/medium/high
+#: vegetation, building, water.
+#:
+#: 1 is in the list because it has to be. This 3DEP delivery classifies
+#: ground, building, water and noise and leaves everything else at 1 — a
+#: sample depth-10 node over Fairfax City is 41 % class 1, 48 % ground,
+#: 11 % building, 0.1 % noise, and has no 3/4/5 at all. Dropping 1 would
+#: drop every tree. What is excluded is noise (7 low, 18 high) and the
+#: withheld/overlap classes.
+KEEP_CLASSES: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 9)
 
 
 @dataclass(frozen=True)
@@ -232,29 +240,33 @@ def fetch_node(
     return PointBatch(x[keep], y[keep], z[keep], cls[keep])
 
 
-#: Voxel indices are taken off a fixed origin so that thinning a node and
-#: thinning the whole chunk land on the same grid. Z is well above any terrain.
-VOXEL_Z0: Metres = -1000.0
+#: Cell indices are taken off a fixed origin so that thinning a node and
+#: thinning the whole chunk land on the same grid.
+def surface_thin(batch: PointBatch, cell_m: Metres, origin: tuple[float, float]) -> PointBatch:
+    """Keep the highest return in each `cell_m` square: a digital surface model.
 
+    A 3-D voxel grid is the obvious thinning and the wrong one here. Tree canopy
+    fills a whole column of 1 m voxels, so a "1 pt/m²" 3-D thin of this county
+    comes out at 4 pt/m² and 265 MB a chunk, most of it interior canopy that a
+    top-down basemap never shows. One point per square metre, the topmost, is
+    both the density the contract asks for and the surface the renderer draws:
+    roofs, canopy tops, and bare ground wherever nothing is above it.
 
-def voxel_thin(batch: PointBatch, cell_m: Metres, origin: tuple[float, float]) -> PointBatch:
-    """Keep one point per `cell_m` cube, the first in scan order.
-
-    Cell indices are folded into a single int64 key rather than a 3-column
-    array; over tens of millions of points that is a sort of 8 bytes a point
-    instead of 24.
+    Idempotent on a fixed grid — the maximum of per-node maxima is the maximum —
+    so it can be applied per node and again over the merged chunk.
     """
     if len(batch) == 0:
         return batch
-    idx = [
-        np.floor((a - o) / cell_m).astype(np.int64)
-        for a, o in ((batch.x, origin[0]), (batch.y, origin[1]), (batch.z, VOXEL_Z0))
-    ]
-    span = max(int(a.max()) + 1 for a in idx)
-    if span >= (1 << 21) or min(int(a.min()) for a in idx) < 0:
-        raise ValueError(f"voxel index span {span} does not fit the int64 key packing")
-    key = (idx[0] << 42) | (idx[1] << 21) | idx[2]
-    _, first = np.unique(key, return_index=True)
+    ix = np.floor((batch.x - origin[0]) / cell_m).astype(np.int64)
+    iy = np.floor((batch.y - origin[1]) / cell_m).astype(np.int64)
+    span = max(int(ix.max()), int(iy.max())) + 1
+    if span >= (1 << 31) or min(int(ix.min()), int(iy.min())) < 0:
+        raise ValueError(f"cell index span {span} does not fit the int64 key packing")
+    key = (ix << 31) | iy
+    # Highest z first within a cell, so the first row of each key group wins.
+    order = np.lexsort((-batch.z, key))
+    ordered = key[order]
+    first = order[np.concatenate(([True], ordered[1:] != ordered[:-1]))]
     first.sort()
     return PointBatch(batch.x[first], batch.y[first], batch.z[first], batch.cls[first])
 

@@ -6,3 +6,4 @@ crates/twin-wasm/pkg
 *.osm.pbf
 .DS_Store
 .venv-lidar/
+__pycache__/

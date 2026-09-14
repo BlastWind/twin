@@ -228,7 +228,7 @@ mod tests {
         assert!((38.5..39.1).contains(&lat), "lat {lat} outside the county");
         assert!((-100.0..1000.0).contains(&h), "height {h} m is not plausible");
         assert!(
-            view.class.iter().all(|c| matches!(c, 2 | 3 | 4 | 5 | 6)),
+            view.class.iter().all(|c| matches!(c, 1..=6 | 9)),
             "unexpected classification survived the filter"
         );
 

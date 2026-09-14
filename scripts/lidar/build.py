@@ -33,6 +33,10 @@ BUILD_DIR = Path("data/build")
 OUT_DIR = BUILD_DIR / "lidar"
 META_DIR = OUT_DIR / "_meta"
 
+#: Points buffered before the running batch is re-thinned. Two million is about
+#: 50 MB of float64 columns, so several chunk workers stay well inside 8 GB.
+COMPACT_AT = 2_000_000
+
 HEIGHT_REF = (
     "xyz.z is orthometric height in metres above NAVD88 as delivered by USGS 3DEP "
     "(EPT vertical units are metres); subtract the chunk's ground_min for a "
@@ -132,24 +136,40 @@ def build_chunk(
     session = _session()
     info = ept.fetch_info(session, resource)
     depth = info.depth_for_density(pts_per_m2)
-    cell_m = 1.0 / math.sqrt(pts_per_m2)
-
     west, south, east, north = grid.cell_bbox(cx, cy)
+    # Thinning happens in Web-Mercator metres, which are stretched by
+    # 1/cos(lat) — 1.28 at this latitude. Divide the cell through by the same
+    # factor so `pts_per_m2` means points per square metre of ground.
+    mid_lat = math.radians(0.5 * (south + north))
+    cell_m = (1.0 / math.sqrt(pts_per_m2)) / math.cos(mid_lat)
+
     box = ept.merc_box(west, south, east, north)
     nodes = ept.Hierarchy(session, info).nodes_in(box, depth)
     origin = (box.xmin, box.ymin)
 
-    # Thin inside the worker: a deep node can hold a million points, and only
-    # one per voxel survives, so the peak is a node rather than a chunk.
+    # Thin inside the worker: a deep node can hold a million points and only one
+    # per cell survives, so the peak is a node rather than a chunk.
     def fetch_thinned(key: ept.NodeKey) -> ept.PointBatch:
-        return ept.voxel_thin(ept.fetch_node(session, info, key, box), cell_m, origin)
+        return ept.surface_thin(ept.fetch_node(session, info, key, box), cell_m, origin)
 
-    batches: list[ept.PointBatch] = []
+    # Fold the arriving nodes into one running batch whenever the backlog grows
+    # past COMPACT_AT. Holding all ~800 nodes of a chunk and then thinning once
+    # peaks at several GB and the box has 8; thinning is idempotent on the same
+    # voxel grid, so folding early costs nothing but the extra sorts.
+    kept = ept.EMPTY
+    pending: list[ept.PointBatch] = []
+    backlog = 0
     with ThreadPoolExecutor(max_workers=threads) as pool:
         futures = [pool.submit(fetch_thinned, key) for key, _ in nodes]
         for fut in as_completed(futures):
-            batches.append(fut.result())
-    thinned = ept.voxel_thin(ept.concat(batches), cell_m, origin)
+            batch = fut.result()
+            pending.append(batch)
+            backlog += len(batch)
+            if backlog >= COMPACT_AT:
+                kept = ept.surface_thin(ept.concat([kept, *pending]), cell_m, origin)
+                pending, backlog = [], 0
+    thinned = ept.surface_thin(ept.concat([kept, *pending]), cell_m, origin)
+    del kept, pending
 
     lon, lat = ept.merc_to_lonlat(thinned.x, thinned.y)
     height = thinned.z.astype(np.float32)
