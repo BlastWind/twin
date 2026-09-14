@@ -1,7 +1,17 @@
 import type { LayerSpecification, StyleSpecification } from 'maplibre-gl'
+import {
+  DEFAULT_IMAGERY_OPACITY,
+  IMAGERY_ATTRIBUTION,
+  IMAGERY_MAX_ZOOM,
+  IMAGERY_SOURCE_ID,
+  IMAGERY_TILE_SIZE,
+  IMAGERY_TILE_URL,
+} from './imagery'
 
 /** Magic-type aliases: keep ids and zooms from degrading into bare strings/numbers. */
 export type LayerId =
+  | 'imagery'
+  | 'lidar'
   | 'roads'
   | 'buildings'
   | 'parcels'
@@ -17,10 +27,17 @@ export type LayerGroup = 'Base' | 'Land use' | 'Transit' | 'Feeds'
 export const LAYER_GROUPS: readonly LayerGroup[] = ['Base', 'Land use', 'Transit', 'Feeds']
 export type SourceLayerName = string & { readonly __brand?: 'SourceLayerName' }
 export type Zoom = number & { readonly __brand?: 'Zoom' }
-export type SourceId = 'world'
+export type SourceId = 'world' | typeof IMAGERY_SOURCE_ID
 
 export const WORLD_SOURCE: SourceId = 'world'
 export const WORLD_PMTILES_URL = '/data/world.pmtiles'
+
+/** Point clouds only make sense once a screen pixel is smaller than a point. */
+export const LIDAR_MIN_ZOOM: Zoom = 16 as Zoom
+
+/** Buildings fade back to this while the point cloud is on, so the two do not fight. */
+export const BUILDING_OPACITY_WITH_LIDAR = 0.25
+export const BUILDING_OPACITY = 0.9
 
 /** Camera over Fairfax County (DESIGN 7.1). */
 export const FAIRFAX_CAMERA = {
@@ -52,6 +69,18 @@ export type LayerEntry = {
   readonly style: LayerStyle
   /** When present, this entry expands into one MapLibre layer per group. */
   readonly lod?: readonly LodGroup[]
+  /**
+   * A raster entry draws from its own tile source, not from the vector tiles,
+   * so `sourceLayer` is meaningless for it and the `vector_layers` probe must
+   * leave its availability alone.
+   */
+  readonly raster?: true
+  /**
+   * A deck.gl entry has no MapLibre layer at all: the registry carries it so
+   * that it appears in the panel and in `defaultVisibility`, and the overlay
+   * that owns it reads the toggle.
+   */
+  readonly deck?: true
 }
 
 /**
@@ -218,6 +247,18 @@ const aadtRadius = () =>
 
 export const LAYER_REGISTRY: readonly LayerEntry[] = [
   {
+    // first in the registry == first in the style == under everything else
+    id: 'imagery',
+    group: 'Base',
+    sourceLayer: '',
+    minzoom: 0,
+    available: true,
+    visibleByDefault: true,
+    raster: true,
+    label: 'Imagery',
+    style: { type: 'raster', paint: { 'raster-opacity': DEFAULT_IMAGERY_OPACITY } },
+  },
+  {
     id: 'roads',
     group: 'Base',
     // openmaptiles/Planetiler names this MVT layer `transportation`.
@@ -247,9 +288,21 @@ export const LAYER_REGISTRY: readonly LayerEntry[] = [
         'fill-extrusion-color': '#3b4657',
         'fill-extrusion-height': HEIGHT_M,
         'fill-extrusion-base': MIN_HEIGHT_M,
-        'fill-extrusion-opacity': 0.9,
+        'fill-extrusion-opacity': BUILDING_OPACITY,
       },
     },
+  },
+  {
+    id: 'lidar',
+    group: 'Base',
+    sourceLayer: '',
+    minzoom: LIDAR_MIN_ZOOM,
+    available: true,
+    visibleByDefault: false,
+    deck: true,
+    label: 'LiDAR point cloud',
+    // drawn by `LidarOverlay` through deck.gl; MapLibre never sees it
+    style: { type: 'background', paint: {} },
   },
   {
     id: 'parcels',
@@ -376,8 +429,8 @@ const toMapLibreLayer = (entry: LayerEntry, visible: boolean, group?: LodGroup):
   ({
     ...entry.style,
     id: group ? `${entry.id}/${group.suffix}` : entry.id,
-    source: WORLD_SOURCE,
-    'source-layer': entry.sourceLayer,
+    source: entry.raster ? IMAGERY_SOURCE_ID : WORLD_SOURCE,
+    ...(entry.raster ? {} : { 'source-layer': entry.sourceLayer }),
     minzoom: group ? group.minzoom : entry.minzoom,
     ...(entry.maxzoom === undefined ? {} : { maxzoom: entry.maxzoom }),
     ...(group ? { filter: ['in', ['get', 'class'], ['literal', group.classes]] } : {}),
@@ -408,7 +461,12 @@ export const KNOWN_SOURCE_LAYERS: SourceLayerSet = new Set<SourceLayerName>(['tr
 export const withAvailability = (
   present: SourceLayerSet,
   registry: readonly LayerEntry[] = LAYER_REGISTRY,
-): readonly LayerEntry[] => registry.map((e) => (e.available === present.has(e.sourceLayer) ? e : { ...e, available: present.has(e.sourceLayer) }))
+): readonly LayerEntry[] =>
+  registry.map((e) => {
+    // raster and deck entries do not come out of the vector tiles at all
+    const available = e.raster || e.deck ? e.available : present.has(e.sourceLayer)
+    return e.available === available ? e : { ...e, available }
+  })
 
 export const availableLayers = (registry: readonly LayerEntry[]): readonly LayerEntry[] =>
   registry.filter((e) => e.available)
@@ -421,18 +479,33 @@ export const buildStyle = (
   visibility: LayerVisibility,
   registry: readonly LayerEntry[] = LAYER_REGISTRY,
   pmtilesUrl = WORLD_PMTILES_URL,
+  imageryOpacity = DEFAULT_IMAGERY_OPACITY,
 ): StyleSpecification => ({
   version: 8,
   glyphs: 'https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf',
   sources: {
     [WORLD_SOURCE]: { type: 'vector', url: `pmtiles://${pmtilesUrl}`, attribution: '© OpenStreetMap contributors' },
+    [IMAGERY_SOURCE_ID]: {
+      type: 'raster',
+      tiles: [IMAGERY_TILE_URL],
+      tileSize: IMAGERY_TILE_SIZE,
+      maxzoom: IMAGERY_MAX_ZOOM,
+      attribution: IMAGERY_ATTRIBUTION,
+    },
   },
   layers: [
     { id: 'background', type: 'background', paint: { 'background-color': '#0e1116' } },
-    ...availableLayers(registry).flatMap((entry) =>
+    ...availableLayers(registry).filter((e) => !e.deck).flatMap((entry) =>
       entry.lod
         ? entry.lod.map((g) => toMapLibreLayer(entry, visibility[entry.id], g))
-        : [toMapLibreLayer(entry, visibility[entry.id])],
+        : [
+            toMapLibreLayer(
+              entry.raster
+                ? { ...entry, style: { ...entry.style, paint: { 'raster-opacity': imageryOpacity } } as LayerStyle }
+                : entry,
+              visibility[entry.id],
+            ),
+          ],
     ),
   ],
 })

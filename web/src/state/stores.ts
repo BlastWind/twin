@@ -27,6 +27,7 @@ import { EMPTY_SCENARIO } from '../sim/protocol'
 import type { ManifestDTO, StudyArea } from '../graph/manifest'
 import { DEFAULT_STUDY_AREA } from '../graph/manifest'
 import type { ChunkEntrySchema } from '../graph/schema'
+import { DEFAULT_IMAGERY_OPACITY } from '../map/imagery'
 import type { ParcelDTO } from '../map/viewportQuery'
 import { EMPTY_CACHE, EMPTY_ORDER, edgeOrder, putHour, type EdgeOrder, type ResultCache } from './resultCache'
 
@@ -162,6 +163,8 @@ export type UiState = {
   /** the registry with `available` resolved against the tiles' `vector_layers` */
   readonly registry: readonly LayerEntry[]
   readonly overlay: boolean
+  /** 0..1 on the raster basemap; its own value because it is not a toggle. */
+  readonly imageryOpacity: number
   readonly devOverlay: boolean
   readonly studyArea: StudyArea
   readonly drawing: boolean
@@ -176,6 +179,7 @@ export type UiState = {
   toggleLayer: (id: LayerId) => void
   setSourceLayers: (present: SourceLayerSet) => void
   toggleOverlay: () => void
+  setImageryOpacity: (imageryOpacity: number) => void
   toggleDevOverlay: () => void
   setStudyArea: (area: StudyArea) => void
   setDrawing: (drawing: boolean) => void
@@ -192,6 +196,7 @@ export const useUiStore = create<UiState>((set) => ({
   layers: defaultVisibility(),
   registry: LAYER_REGISTRY,
   overlay: true,
+  imageryOpacity: DEFAULT_IMAGERY_OPACITY,
   devOverlay: true,
   studyArea: DEFAULT_STUDY_AREA,
   drawing: false,
@@ -211,6 +216,7 @@ export const useUiStore = create<UiState>((set) => ({
       return { registry, layers: { ...defaultVisibility(registry), ...pickToggled(s.layers, s.registry) } }
     }),
   toggleOverlay: () => set((s) => ({ overlay: !s.overlay })),
+  setImageryOpacity: (imageryOpacity) => set({ imageryOpacity }),
   toggleDevOverlay: () => set((s) => ({ devOverlay: !s.devOverlay })),
   setStudyArea: (studyArea) => set({ studyArea }),
   setDrawing: (drawing) => set({ drawing }),

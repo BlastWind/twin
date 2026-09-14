@@ -41,7 +41,15 @@ describe('probeSourceLayers', () => {
 describe('withAvailability', () => {
   it('marks exactly the layers the tiles carry', () => {
     const registry = withAvailability(sourceLayersOf(METADATA))
-    expect(availableLayers(registry).map((l) => l.id)).toEqual(['roads', 'buildings', 'parcels', 'zoning'])
+    // imagery and lidar have their own sources, so the vector probe never hides them
+    expect(availableLayers(registry).map((l) => l.id)).toEqual([
+      'imagery',
+      'roads',
+      'buildings',
+      'lidar',
+      'parcels',
+      'zoning',
+    ])
   })
 
   it('hides missing layers from the style rather than pointing them at nothing', () => {
@@ -55,11 +63,14 @@ describe('withAvailability', () => {
   it('never invents a layer the registry does not declare', () => {
     const registry = withAvailability(new Set(['transportation', 'not_a_layer']))
     expect(registry).toHaveLength(LAYER_REGISTRY.length)
-    expect(availableLayers(registry).map((l) => l.id)).toEqual(['roads'])
+    expect(availableLayers(registry).map((l) => l.id)).toEqual(['imagery', 'roads', 'lidar'])
   })
 
   it('leaves defaults off for everything the pipeline has not emitted', () => {
     const vis = defaultVisibility(withAvailability(new Set()))
-    expect(Object.values(vis).every((v) => v === false)).toBe(true)
+    const { imagery, ...vector } = vis
+    // the basemap does not come from the pipeline, and is on by default
+    expect(imagery).toBe(true)
+    expect(Object.values(vector).every((v) => v === false)).toBe(true)
   })
 })
